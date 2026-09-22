@@ -740,8 +740,12 @@ async function exitCleanMode(
   return destinationWindowId;
 }
 
-async function switchCleanTab(direction) {
+async function switchCleanTab(
+  direction,
+  requestedTab = null
+) {
   const cleanTab =
+    requestedTab ??
     await getFocusedTab();
 
   if (
@@ -1284,28 +1288,51 @@ chrome.runtime.onMessage.addListener(
 
 chrome.commands.onCommand.addListener(
   (command) => {
-    let operation = null;
-
-    if (command === TOGGLE_COMMAND) {
-      operation = toggleFocusedTab;
-    } else if (
-      command === NEXT_CLEAN_TAB_COMMAND
+    if (
+      command !== TOGGLE_COMMAND &&
+      command !== NEXT_CLEAN_TAB_COMMAND &&
+      command !== PREVIOUS_CLEAN_TAB_COMMAND
     ) {
-      operation =
-        () => switchCleanTab(1);
-    } else if (
-      command === PREVIOUS_CLEAN_TAB_COMMAND
-    ) {
-      operation =
-        () => switchCleanTab(-1);
-    }
-
-    if (!operation) {
       return;
     }
 
+    /*
+     * Start resolving the focused tab immediately,
+     * before any earlier queued window operation can
+     * delay this command. The queued operation still
+     * refreshes that exact tab by id before acting.
+     */
+    const focusedTabPromise =
+      getFocusedTab();
+
     enqueueOperation(
-      operation
+      async () => {
+        const focusedTab =
+          await focusedTabPromise;
+
+        const tabId =
+          focusedTab?.id;
+
+        const tab =
+          tabId === undefined
+            ? null
+            : await getTabIfExists(
+                tabId
+              );
+
+        if (command === TOGGLE_COMMAND) {
+          await toggleTab(tab);
+          return;
+        }
+
+        await switchCleanTab(
+          command ===
+            NEXT_CLEAN_TAB_COMMAND
+            ? 1
+            : -1,
+          tab
+        );
+      }
     ).catch((error) => {
       console.error(
         "Clean-window command failed:",
