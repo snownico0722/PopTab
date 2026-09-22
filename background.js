@@ -1,4 +1,4 @@
-console.log("NotF11 service worker started.");
+console.log("PopTab service worker started.");
 
 const TOGGLE_COMMAND = "toggle-clean-window";
 const NEXT_CLEAN_TAB_COMMAND = "next-clean-tab";
@@ -466,6 +466,70 @@ async function enterCleanMode(
   return popupWindow;
 }
 
+async function restoreBridgeWindow(
+  bridgeWindow,
+  cleanTab,
+  session,
+  sessions,
+  {
+    focusWindow = true,
+    activateTab = true,
+    replaceDeadSource = false
+  } = {}
+) {
+  await chrome.windows.update(
+    bridgeWindow.id,
+    {
+      state: "normal"
+    }
+  );
+
+  if (session.sourceGeometry) {
+    await chrome.windows.update(
+      bridgeWindow.id,
+      session.sourceGeometry
+    );
+  }
+
+  if (replaceDeadSource) {
+    const oldSourceWindowId =
+      session.sourceWindowId;
+
+    for (
+      const sibling of
+      Object.values(sessions)
+    ) {
+      if (
+        sibling.sourceWindowId ===
+        oldSourceWindowId
+      ) {
+        sibling.sourceWindowId =
+          bridgeWindow.id;
+      }
+    }
+  }
+
+  if (activateTab) {
+    await chrome.tabs.update(
+      cleanTab.id,
+      {
+        active: true
+      }
+    );
+  }
+
+  if (focusWindow) {
+    await chrome.windows.update(
+      bridgeWindow.id,
+      {
+        focused: true
+      }
+    );
+  }
+
+  return bridgeWindow.id;
+}
+
 async function exitCleanMode(
   cleanTab,
   session,
@@ -500,10 +564,6 @@ async function exitCleanMode(
   /*
    * Restore the tab's original pin state while it
    * is inside the normal bridge.
-   *
-   * Chromium may change that state again during a
-   * cross-window move, so the destination branch
-   * below restores it a second time after the move.
    */
   await chrome.tabs.update(
     cleanTab.id,
@@ -523,74 +583,120 @@ async function exitCleanMode(
     sourceWindow &&
     sourceWindow.type === "normal"
   ) {
-    const sourceTabs =
-      await chrome.tabs.query({
-        windowId: sourceWindow.id
-      });
+    try {
+      const sourceTabs =
+        await chrome.tabs.query({
+          windowId: sourceWindow.id
+        });
 
-    const targetIndex =
-      getReturnIndex(
-        session,
-        sourceTabs
+      const targetIndex =
+        getReturnIndex(
+          session,
+          sourceTabs
+        );
+
+      await chrome.tabs.move(
+        cleanTab.id,
+        {
+          windowId: sourceWindow.id,
+          index: targetIndex
+        }
       );
 
-    /*
-     * First move the live tab back into its source
-     * browser.
-     */
-    await chrome.tabs.move(
-      cleanTab.id,
-      {
-        windowId: sourceWindow.id,
-        index: targetIndex
-      }
-    );
-
-    /*
-     * A cross-window move can cause Chromium to
-     * drop or reposition the pinned state.
-     *
-     * Restore the original state only after the
-     * tab has reached its final destination.
-     */
-    await chrome.tabs.update(
-      cleanTab.id,
-      {
-        pinned: session.wasPinned
-      }
-    );
-
-    /*
-     * Pinning or unpinning can itself change the
-     * tab's index. Reapply the logical return index
-     * after the pin state has been restored.
-     */
-    await chrome.tabs.move(
-      cleanTab.id,
-      {
-        windowId: sourceWindow.id,
-        index: targetIndex
-      }
-    );
-
-    destinationWindowId =
-      sourceWindow.id;
-
-    if (activateReturnedTab) {
+      /*
+       * A cross-window move can cause Chromium to
+       * drop or reposition the pinned state.
+       */
       await chrome.tabs.update(
         cleanTab.id,
         {
-          active: true
+          pinned: session.wasPinned
         }
       );
-    }
 
-    if (focusSource) {
-      await chrome.windows.update(
-        sourceWindow.id,
+      /*
+       * Pinning or unpinning can itself change the
+       * tab's index. Reapply the logical return index
+       * after the pin state has been restored.
+       */
+      await chrome.tabs.move(
+        cleanTab.id,
         {
-          focused: true
+          windowId: sourceWindow.id,
+          index: targetIndex
         }
+      );
+
+      destinationWindowId =
+        sourceWindow.id;
+
+      if (activateReturnedTab) {
+        await chrome.tabs.update(
+          cleanTab.id,
+          {
+            active: true
+          }
+        );
+      }
+
+      if (focusSource) {
+        await chrome.windows.update(
+          sourceWindow.id,
+          {
+            focused: true
+          }
+        );
+      }
+    } catch (error) {
+      /*
+       * The source window can disappear between the
+       * existence check above and the actual move.
+       * If the live tab is still in the minimized
+       * bridge, recover it there instead of leaving
+       * the user's page hidden.
+       */
+      const currentTab =
+        await getTabIfExists(
+          cleanTab.id
+        );
+
+      const currentBridge =
+        await getWindowIfExists(
+          bridgeWindow.id
+        );
+
+      if (
+        !currentTab ||
+        !currentBridge ||
+        currentTab.windowId !==
+          bridgeWindow.id
+      ) {
+        throw error;
+      }
+
+      const sourceStillExists =
+        await getWindowIfExists(
+          sourceWindow.id
+        );
+
+      destinationWindowId =
+        await restoreBridgeWindow(
+          currentBridge,
+          cleanTab,
+          session,
+          sessions,
+          {
+            focusWindow: focusSource,
+            activateTab:
+              activateReturnedTab,
+            replaceDeadSource:
+              !sourceStillExists
+          }
+        );
+
+      console.warn(
+        "Source-window return failed; the live tab was recovered in a normal bridge window.",
+        error
       );
     }
   } else {
@@ -601,57 +707,19 @@ async function exitCleanMode(
     const oldSourceWindowId =
       session.sourceWindowId;
 
-    await chrome.windows.update(
-      bridgeWindow.id,
-      {
-        state: "normal"
-      }
-    );
-
-    if (session.sourceGeometry) {
-      await chrome.windows.update(
-        bridgeWindow.id,
-        session.sourceGeometry
-      );
-    }
-
     destinationWindowId =
-      bridgeWindow.id;
-
-    /*
-     * Any sibling clean windows that belonged to
-     * the dead source browser now return here too.
-     */
-    for (
-      const sibling of
-      Object.values(sessions)
-    ) {
-      if (
-        sibling.sourceWindowId ===
-        oldSourceWindowId
-      ) {
-        sibling.sourceWindowId =
-          bridgeWindow.id;
-      }
-    }
-
-    if (activateReturnedTab) {
-      await chrome.tabs.update(
-        cleanTab.id,
+      await restoreBridgeWindow(
+        bridgeWindow,
+        cleanTab,
+        session,
+        sessions,
         {
-          active: true
+          focusWindow: focusSource,
+          activateTab:
+            activateReturnedTab,
+          replaceDeadSource: true
         }
       );
-    }
-
-    if (focusSource) {
-      await chrome.windows.update(
-        bridgeWindow.id,
-        {
-          focused: true
-        }
-      );
-    }
 
     console.log(
       `Source window ${oldSourceWindowId} no longer existed; window ${bridgeWindow.id} became the replacement source.`
@@ -672,9 +740,14 @@ async function exitCleanMode(
   return destinationWindowId;
 }
 
-async function switchCleanTab(direction) {
+async function switchCleanTab(
+  direction,
+  requestedTab = undefined
+) {
   const cleanTab =
-    await getFocusedTab();
+    requestedTab === undefined
+      ? await getFocusedTab()
+      : requestedTab;
 
   if (
     !cleanTab ||
@@ -889,7 +962,7 @@ async function recoverUntrackedPopup(
 ) {
   /*
    * A full browser restart can restore a previous
-   * clean popup after NotF11 has correctly discarded
+   * clean popup after PopTab has correctly discarded
    * the old return ticket.
    *
    * The original source window can no longer be
@@ -1005,7 +1078,7 @@ async function toggleTab(tab) {
     );
 
   /*
-   * A popup without a valid NotF11 session may be
+   * A popup without a valid PopTab session may be
    * a clean window restored by Chromium after a
    * complete browser restart.
    *
@@ -1026,13 +1099,13 @@ async function toggleTab(tab) {
 
   /*
    * Do not reinterpret other special Chromium window
-   * types as NotF11 clean windows.
+   * types as PopTab clean windows.
    */
   if (
     currentWindow.type !== "normal"
   ) {
     console.log(
-      "This window type is not supported by NotF11."
+      "This window type is not supported by PopTab."
     );
 
     return;
@@ -1042,13 +1115,6 @@ async function toggleTab(tab) {
     tab,
     sessions
   );
-}
-
-async function toggleFocusedTab() {
-  const activeTab =
-    await getFocusedTab();
-
-  await toggleTab(activeTab);
 }
 
 async function removeClosedCleanSession(
@@ -1074,9 +1140,21 @@ async function removeClosedCleanSession(
 }
 
 chrome.action.onClicked.addListener(
-  () => {
+  (clickedTab) => {
+    const tabId =
+      clickedTab?.id;
+
     enqueueOperation(
-      toggleFocusedTab
+      async () => {
+        const tab =
+          tabId === undefined
+            ? null
+            : await getTabIfExists(
+                tabId
+              );
+
+        await toggleTab(tab);
+      }
     ).catch((error) => {
       console.error(
         "Clean-window action failed:",
@@ -1092,35 +1170,33 @@ chrome.runtime.onMessage.addListener(
       message?.type ===
       "notf11-video-float-state"
     ) {
-      enqueueOperation(
-        async () => {
-          const windowId =
-            sender.tab?.windowId;
+      (async () => {
+        const windowId =
+          sender.tab?.windowId;
 
-          if (
-            windowId === undefined
-          ) {
-            sendResponse({
-              ok: true,
-              enabled: false
-            });
-
-            return;
-          }
-
-          const currentWindow =
-            await getWindowIfExists(
-              windowId
-            );
-
+        if (
+          windowId === undefined
+        ) {
           sendResponse({
             ok: true,
-            enabled:
-              currentWindow?.type ===
-              "normal"
+            enabled: false
           });
+
+          return;
         }
-      ).catch((error) => {
+
+        const currentWindow =
+          await getWindowIfExists(
+            windowId
+          );
+
+        sendResponse({
+          ok: true,
+          enabled:
+            currentWindow?.type ===
+            "normal"
+        });
+      })().catch((error) => {
         console.error(
           "Video float state query failed:",
           error
@@ -1206,28 +1282,51 @@ chrome.runtime.onMessage.addListener(
 
 chrome.commands.onCommand.addListener(
   (command) => {
-    let operation = null;
-
-    if (command === TOGGLE_COMMAND) {
-      operation = toggleFocusedTab;
-    } else if (
-      command === NEXT_CLEAN_TAB_COMMAND
+    if (
+      command !== TOGGLE_COMMAND &&
+      command !== NEXT_CLEAN_TAB_COMMAND &&
+      command !== PREVIOUS_CLEAN_TAB_COMMAND
     ) {
-      operation =
-        () => switchCleanTab(1);
-    } else if (
-      command === PREVIOUS_CLEAN_TAB_COMMAND
-    ) {
-      operation =
-        () => switchCleanTab(-1);
-    }
-
-    if (!operation) {
       return;
     }
 
+    /*
+     * Start resolving the focused tab immediately,
+     * before any earlier queued window operation can
+     * delay this command. The queued operation still
+     * refreshes that exact tab by id before acting.
+     */
+    const focusedTabPromise =
+      getFocusedTab();
+
     enqueueOperation(
-      operation
+      async () => {
+        const focusedTab =
+          await focusedTabPromise;
+
+        const tabId =
+          focusedTab?.id;
+
+        const tab =
+          tabId === undefined
+            ? null
+            : await getTabIfExists(
+                tabId
+              );
+
+        if (command === TOGGLE_COMMAND) {
+          await toggleTab(tab);
+          return;
+        }
+
+        await switchCleanTab(
+          command ===
+            NEXT_CLEAN_TAB_COMMAND
+            ? 1
+            : -1,
+          tab
+        );
+      }
     ).catch((error) => {
       console.error(
         "Clean-window command failed:",
