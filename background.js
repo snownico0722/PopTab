@@ -1162,9 +1162,6 @@ async function findFreshClosedPopupSession(
         maxResults: 5
       });
 
-    const nowSeconds =
-      Date.now() / 1000;
-
     const match =
       recentlyClosed.find(
         (entry) => {
@@ -1172,10 +1169,29 @@ async function findFreshClosedPopupSession(
             entry.window;
 
           if (
-            !closedWindow?.sessionId ||
+            !closedWindow?.sessionId
+          ) {
+            return false;
+          }
+
+          /*
+           * Closed-window snapshots obtained from
+           * chrome.sessions may omit window type or
+           * tab details. When those fields exist,
+           * still use them to reject obvious
+           * non-PopTab candidates.
+           */
+          if (
+            closedWindow.type &&
             closedWindow.type !==
-              "popup" ||
-            closedWindow.tabs?.length !==
+              "popup"
+          ) {
+            return false;
+          }
+
+          if (
+            closedWindow.tabs &&
+            closedWindow.tabs.length !==
               1
           ) {
             return false;
