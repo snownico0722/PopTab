@@ -464,7 +464,8 @@ async function enterCleanMode(
     sourceOrder,
     originalIndex: activeTab.index,
     wasPinned: activeTab.pinned,
-    sourceGeometry
+    sourceGeometry,
+    openedAt: Date.now()
   };
 
   await saveSessions(sessions);
@@ -1143,7 +1144,10 @@ async function toggleTab(tab) {
   );
 }
 
-async function findFreshClosedPopupSession() {
+async function findFreshClosedPopupSession(
+  session,
+  closeObservedAt
+) {
   for (
     let attempt = 0;
     attempt < 4;
@@ -1177,12 +1181,28 @@ async function findFreshClosedPopupSession() {
             return false;
           }
 
-          return (
+          const openedAtSeconds =
+            Number.isFinite(
+              session.openedAt
+            )
+              ? session.openedAt /
+                1000
+              : 0;
+
+          const closedRecently =
             Math.abs(
-              nowSeconds -
+              closeObservedAt -
                 entry.lastModified
             ) <=
-            RECENT_CLOSE_MAX_AGE_SECONDS
+            RECENT_CLOSE_MAX_AGE_SECONDS;
+
+          const belongsToCurrentEra =
+            entry.lastModified >=
+              openedAtSeconds - 1;
+
+          return (
+            closedRecently &&
+            belongsToCurrentEra
           );
         }
       );
@@ -1226,10 +1246,14 @@ async function getRestoredTab(
 
 async function writeBackClosedCleanSession(
   session,
-  sessions
+  sessions,
+  closeObservedAt
 ) {
   const closedSession =
-    await findFreshClosedPopupSession();
+    await findFreshClosedPopupSession(
+      session,
+      closeObservedAt
+    );
 
   const closedSessionId =
     closedSession?.window?.sessionId;
@@ -1307,9 +1331,13 @@ async function handleClosedCleanSession(
       CLOSE_BEHAVIOR_WRITEBACK
   ) {
     try {
+      const closeObservedAt =
+        Date.now() / 1000;
+
       await writeBackClosedCleanSession(
         session,
-        sessions
+        sessions,
+        closeObservedAt
       );
 
       console.log(
