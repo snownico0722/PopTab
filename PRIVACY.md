@@ -1,6 +1,6 @@
 # PopTab Privacy Policy
 
-**Last updated: August 27, 2026**
+**Last updated: September 23, 2026**
 
 PopTab does not collect, transmit, sell, share, or otherwise process personal or sensitive user data.
 
@@ -21,7 +21,9 @@ PopTab does not collect:
 
 PopTab uses the Chromium `storage` permission solely to store local extension state required for its clean-window functionality.
 
-This state may include browser tab and window identifiers, tab order, pinned-tab state, and window geometry.
+This state may include browser tab and window identifiers, tab order, pinned-tab state, window geometry, and the user's close-behavior preference.
+
+PopTab also uses the Chromium `sessions` permission only when the user enables **write back on window close**. Chrome exposes recently closed browser sessions through this API; PopTab uses the session identifier, window type, tab count, and close time needed to restore the just-closed PopTab window. It does not transmit this information or use it for analytics, profiling, or browsing-history collection.
 
 This information:
 
