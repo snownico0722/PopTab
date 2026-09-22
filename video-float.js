@@ -159,7 +159,7 @@
     button.textContent = "浮窗";
     button.setAttribute(
       "aria-label",
-      "用 NotF11 打开浮窗"
+      "用 PopTab 打开浮窗"
     );
 
     Object.assign(
@@ -218,7 +218,7 @@
               chrome.runtime.lastError
             ) {
               console.debug(
-                "NotF11 video float:",
+                "PopTab video float:",
                 chrome.runtime
                   .lastError.message
               );
