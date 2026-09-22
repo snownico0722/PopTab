@@ -5,6 +5,13 @@ const NEXT_CLEAN_TAB_COMMAND = "next-clean-tab";
 const PREVIOUS_CLEAN_TAB_COMMAND = "previous-clean-tab";
 
 const STORAGE_KEY = "cleanSessions";
+const CLOSE_BEHAVIOR_STORAGE_KEY =
+  "closeBehavior";
+const CLOSE_BEHAVIOR_DISCARD =
+  "discard";
+const CLOSE_BEHAVIOR_WRITEBACK =
+  "writeback";
+const RECENT_CLOSE_MAX_AGE_SECONDS = 5;
 const TAB_GROUP_ID_NONE = -1;
 
 let operationQueue = Promise.resolve();
@@ -27,6 +34,25 @@ async function loadSessions() {
 async function saveSessions(sessions) {
   await chrome.storage.local.set({
     [STORAGE_KEY]: sessions
+  });
+}
+
+async function loadCloseBehavior() {
+  const result =
+    await chrome.storage.local.get(
+      CLOSE_BEHAVIOR_STORAGE_KEY
+    );
+
+  return result[
+    CLOSE_BEHAVIOR_STORAGE_KEY
+  ] === CLOSE_BEHAVIOR_WRITEBACK
+    ? CLOSE_BEHAVIOR_WRITEBACK
+    : CLOSE_BEHAVIOR_DISCARD;
+}
+
+function wait(milliseconds) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
   });
 }
 
@@ -1117,8 +1143,138 @@ async function toggleTab(tab) {
   );
 }
 
-async function removeClosedCleanSession(
-  tabId
+async function findFreshClosedPopupSession() {
+  for (
+    let attempt = 0;
+    attempt < 4;
+    attempt += 1
+  ) {
+    if (attempt > 0) {
+      await wait(50);
+    }
+
+    const recentlyClosed =
+      await chrome.sessions.getRecentlyClosed({
+        maxResults: 5
+      });
+
+    const nowSeconds =
+      Date.now() / 1000;
+
+    const match =
+      recentlyClosed.find(
+        (entry) => {
+          const closedWindow =
+            entry.window;
+
+          if (
+            !closedWindow?.sessionId ||
+            closedWindow.type !==
+              "popup" ||
+            closedWindow.tabs?.length !==
+              1
+          ) {
+            return false;
+          }
+
+          return (
+            Math.abs(
+              nowSeconds -
+                entry.lastModified
+            ) <=
+            RECENT_CLOSE_MAX_AGE_SECONDS
+          );
+        }
+      );
+
+    if (match) {
+      return match;
+    }
+  }
+
+  return null;
+}
+
+async function getRestoredTab(
+  restoredSession
+) {
+  if (
+    restoredSession.tab?.id !==
+    undefined
+  ) {
+    return await getTabIfExists(
+      restoredSession.tab.id
+    );
+  }
+
+  const restoredWindowId =
+    restoredSession.window?.id;
+
+  if (
+    restoredWindowId === undefined
+  ) {
+    return null;
+  }
+
+  const tabs =
+    await chrome.tabs.query({
+      windowId: restoredWindowId
+    });
+
+  return tabs[0] ?? null;
+}
+
+async function writeBackClosedCleanSession(
+  session,
+  sessions
+) {
+  const closedSession =
+    await findFreshClosedPopupSession();
+
+  const closedSessionId =
+    closedSession?.window?.sessionId;
+
+  if (!closedSessionId) {
+    throw new Error(
+      "Recently closed PopTab window was not available for restore."
+    );
+  }
+
+  const restoredSession =
+    await chrome.sessions.restore(
+      closedSessionId
+    );
+
+  const restoredTab =
+    await getRestoredTab(
+      restoredSession
+    );
+
+  if (
+    !restoredTab ||
+    restoredTab.id === undefined
+  ) {
+    throw new Error(
+      "Restored PopTab session did not contain a usable tab."
+    );
+  }
+
+  /*
+   * The restored tab has a new tab id, but the
+   * original session keeps the old logical tab id
+   * inside sourceOrder. exitCleanMode() can therefore
+   * reuse the normal return-position calculation.
+   */
+  await exitCleanMode(
+    restoredTab,
+    session,
+    sessions
+  );
+}
+
+async function handleClosedCleanSession(
+  tabId,
+  removeInfo
 ) {
   const sessions =
     await loadSessions();
@@ -1126,17 +1282,66 @@ async function removeClosedCleanSession(
   const key =
     keyForTab(tabId);
 
-  if (!sessions[key]) {
+  const session =
+    sessions[key];
+
+  if (!session) {
     return;
+  }
+
+  const closedTrackedPopup =
+    Boolean(
+      removeInfo?.isWindowClosing &&
+      removeInfo.windowId ===
+        session.popupWindowId
+    );
+
+  const closeBehavior =
+    closedTrackedPopup
+      ? await loadCloseBehavior()
+      : CLOSE_BEHAVIOR_DISCARD;
+
+  if (
+    closedTrackedPopup &&
+    closeBehavior ===
+      CLOSE_BEHAVIOR_WRITEBACK
+  ) {
+    try {
+      await writeBackClosedCleanSession(
+        session,
+        sessions
+      );
+
+      console.log(
+        `Closed clean tab ${tabId} restored and written back to its source window.`
+      );
+    } catch (error) {
+      /*
+       * Closing has already completed at this point.
+       * If Chromium cannot provide the just-closed
+       * session, do not restore an unrelated older
+       * tab as a fallback.
+       */
+      console.error(
+        "Closed clean-tab writeback failed:",
+        error
+      );
+    }
   }
 
   delete sessions[key];
 
   await saveSessions(sessions);
 
-  console.log(
-    `Closed clean tab ${tabId} removed from stored sessions.`
-  );
+  if (
+    !closedTrackedPopup ||
+    closeBehavior !==
+      CLOSE_BEHAVIOR_WRITEBACK
+  ) {
+    console.log(
+      `Closed clean tab ${tabId} removed from stored sessions.`
+    );
+  }
 }
 
 chrome.action.onClicked.addListener(
@@ -1337,11 +1542,12 @@ chrome.commands.onCommand.addListener(
 );
 
 chrome.tabs.onRemoved.addListener(
-  (tabId) => {
+  (tabId, removeInfo) => {
     enqueueOperation(
       () =>
-        removeClosedCleanSession(
-          tabId
+        handleClosedCleanSession(
+          tabId,
+          removeInfo
         )
     ).catch((error) => {
       console.error(
