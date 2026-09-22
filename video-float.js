@@ -417,7 +417,21 @@
 
   const mutationObserver =
     new MutationObserver(
-      scheduleScan
+      (records) => {
+        const externalChange =
+          records.some(
+            (record) =>
+              record.target !==
+                button &&
+              !button?.contains(
+                record.target
+              )
+          );
+
+        if (externalChange) {
+          scheduleScan();
+        }
+      }
     );
 
   mutationObserver.observe(
