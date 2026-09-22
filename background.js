@@ -1144,7 +1144,7 @@ async function toggleTab(tab) {
   );
 }
 
-async function findFreshClosedPopupSession(
+async function findFreshClosedSession(
   session,
   closeObservedAt
 ) {
@@ -1167,22 +1167,30 @@ async function findFreshClosedPopupSession(
         (entry) => {
           const closedWindow =
             entry.window;
+          const closedTab =
+            entry.tab;
+          const closedWindowTab =
+            closedWindow?.tabs?.[0];
 
-          if (
-            !closedWindow?.sessionId
-          ) {
+          const hasSessionId =
+            Boolean(
+              closedWindow?.sessionId ||
+              closedTab?.sessionId
+            );
+
+          if (!hasSessionId) {
             return false;
           }
 
           /*
-           * Closed-window snapshots obtained from
-           * chrome.sessions may omit window type or
-           * tab details. When those fields exist,
-           * still use them to reject obvious
-           * non-PopTab candidates.
+           * Closed-session snapshots may omit some
+           * window metadata. Use every field Chrome
+           * does provide to reject unrelated recent
+           * sessions, including the original
+           * windowId when it survives in Tab data.
            */
           if (
-            closedWindow.type &&
+            closedWindow?.type &&
             closedWindow.type !==
               "popup"
           ) {
@@ -1190,9 +1198,23 @@ async function findFreshClosedPopupSession(
           }
 
           if (
-            closedWindow.tabs &&
+            closedWindow?.tabs &&
             closedWindow.tabs.length !==
               1
+          ) {
+            return false;
+          }
+
+          const closedWindowId =
+            closedTab?.windowId ??
+            closedWindowTab?.windowId;
+
+          if (
+            Number.isFinite(
+              closedWindowId
+            ) &&
+            closedWindowId !==
+              session.popupWindowId
           ) {
             return false;
           }
@@ -1266,13 +1288,14 @@ async function writeBackClosedCleanSession(
   closeObservedAt
 ) {
   const closedSession =
-    await findFreshClosedPopupSession(
+    await findFreshClosedSession(
       session,
       closeObservedAt
     );
 
   const closedSessionId =
-    closedSession?.window?.sessionId;
+    closedSession?.window?.sessionId ??
+    closedSession?.tab?.sessionId;
 
   if (!closedSessionId) {
     throw new Error(
