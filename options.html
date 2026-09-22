@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PopTab 设置</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main class="panel">
+    <header>
+      <h1>PopTab 设置</h1>
+      <p>控制直接关闭 PopTab 窗口时的行为。</p>
+    </header>
+
+    <section class="setting-group" aria-labelledby="close-title">
+      <h2 id="close-title">点击 × 关闭 PopTab 时</h2>
+
+      <label class="option">
+        <input type="radio" name="closeBehavior" value="discard">
+        <span>
+          <strong>不写回原窗口</strong>
+          <small>保持当前行为：关闭 PopTab 后直接结束这个标签页。</small>
+        </span>
+      </label>
+
+      <label class="option">
+        <input type="radio" name="closeBehavior" value="writeback">
+        <span>
+          <strong>写回原窗口</strong>
+          <small>关闭后恢复刚关闭的 PopTab 会话，并放回原来的浏览器窗口和逻辑位置。</small>
+        </span>
+      </label>
+    </section>
+
+    <p class="note"><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd> 退出始终写回原窗口，不受这里影响。</p>
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+  </main>
+
+  <script src="options.js"></script>
+</body>
+</html>
