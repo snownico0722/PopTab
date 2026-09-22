@@ -1049,6 +1049,81 @@ chrome.action.onClicked.addListener(
   }
 );
 
+chrome.runtime.onMessage.addListener(
+  (message, sender, sendResponse) => {
+    if (
+      message?.type !==
+      "notf11-open-video-float"
+    ) {
+      return false;
+    }
+
+    enqueueOperation(
+      async () => {
+        const tabId =
+          sender.tab?.id;
+
+        if (tabId === undefined) {
+          throw new Error(
+            "Video float request has no source tab."
+          );
+        }
+
+        const tab =
+          await getTabIfExists(
+            tabId
+          );
+
+        if (!tab) {
+          throw new Error(
+            "Video float source tab no longer exists."
+          );
+        }
+
+        const currentWindow =
+          await getWindowIfExists(
+            tab.windowId
+          );
+
+        /*
+         * The in-page button only enters Clean mode.
+         * Once the tab is already in a popup, keep the
+         * button from acting as a second return control.
+         */
+        if (
+          !currentWindow ||
+          currentWindow.type !== "normal"
+        ) {
+          sendResponse({
+            ok: true,
+            ignored: true
+          });
+
+          return;
+        }
+
+        await toggleTab(tab);
+
+        sendResponse({
+          ok: true
+        });
+      }
+    ).catch((error) => {
+      console.error(
+        "Video float action failed:",
+        error
+      );
+
+      sendResponse({
+        ok: false,
+        error: error.message
+      });
+    });
+
+    return true;
+  }
+);
+
 chrome.commands.onCommand.addListener(
   (command) => {
     let operation = null;
