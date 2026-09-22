@@ -46,6 +46,28 @@ async function getWindowIfExists(windowId) {
   }
 }
 
+async function setVideoFloatEnabled(
+  tabId,
+  enabled
+) {
+  try {
+    await chrome.tabs.sendMessage(
+      tabId,
+      {
+        type:
+          "notf11-video-float-enabled",
+        enabled
+      }
+    );
+  } catch {
+    /*
+     * Some pages cannot host content scripts.
+     * Window switching must not depend on the
+     * optional in-page video control.
+     */
+  }
+}
+
 async function getFocusedTab() {
   const tabs = await chrome.tabs.query({
     active: true,
@@ -432,6 +454,11 @@ async function enterCleanMode(
     );
   }
 
+  await setVideoFloatEnabled(
+    activeTab.id,
+    false
+  );
+
   console.log(
     `Tab ${activeTab.id} entered clean mode from window ${sourceWindow.id}.`
   );
@@ -636,6 +663,11 @@ async function exitCleanMode(
   ];
 
   await saveSessions(sessions);
+
+  await setVideoFloatEnabled(
+    cleanTab.id,
+    true
+  );
 
   return destinationWindowId;
 }
@@ -910,6 +942,11 @@ async function recoverUntrackedPopup(
     );
   }
 
+  await setVideoFloatEnabled(
+    tab.id,
+    true
+  );
+
   console.log(
     `Untracked popup tab ${tab.id} recovered into normal window ${normalWindow.id}.`
   );
@@ -1035,6 +1072,137 @@ async function removeClosedCleanSession(
     `Closed clean tab ${tabId} removed from stored sessions.`
   );
 }
+
+chrome.action.onClicked.addListener(
+  () => {
+    enqueueOperation(
+      toggleFocusedTab
+    ).catch((error) => {
+      console.error(
+        "Clean-window action failed:",
+        error
+      );
+    });
+  }
+);
+
+chrome.runtime.onMessage.addListener(
+  (message, sender, sendResponse) => {
+    if (
+      message?.type ===
+      "notf11-video-float-state"
+    ) {
+      enqueueOperation(
+        async () => {
+          const windowId =
+            sender.tab?.windowId;
+
+          if (
+            windowId === undefined
+          ) {
+            sendResponse({
+              ok: true,
+              enabled: false
+            });
+
+            return;
+          }
+
+          const currentWindow =
+            await getWindowIfExists(
+              windowId
+            );
+
+          sendResponse({
+            ok: true,
+            enabled:
+              currentWindow?.type ===
+              "normal"
+          });
+        }
+      ).catch((error) => {
+        console.error(
+          "Video float state query failed:",
+          error
+        );
+
+        sendResponse({
+          ok: false,
+          enabled: false,
+          error: error.message
+        });
+      });
+
+      return true;
+    }
+
+    if (
+      message?.type !==
+      "notf11-open-video-float"
+    ) {
+      return false;
+    }
+
+    enqueueOperation(
+      async () => {
+        const tabId =
+          sender.tab?.id;
+
+        if (tabId === undefined) {
+          throw new Error(
+            "Video float request has no source tab."
+          );
+        }
+
+        const tab =
+          await getTabIfExists(
+            tabId
+          );
+
+        if (!tab) {
+          throw new Error(
+            "Video float source tab no longer exists."
+          );
+        }
+
+        const currentWindow =
+          await getWindowIfExists(
+            tab.windowId
+          );
+
+        if (
+          !currentWindow ||
+          currentWindow.type !== "normal"
+        ) {
+          sendResponse({
+            ok: true,
+            ignored: true
+          });
+
+          return;
+        }
+
+        await toggleTab(tab);
+
+        sendResponse({
+          ok: true
+        });
+      }
+    ).catch((error) => {
+      console.error(
+        "Video float action failed:",
+        error
+      );
+
+      sendResponse({
+        ok: false,
+        error: error.message
+      });
+    });
+
+    return true;
+  }
+);
 
 chrome.commands.onCommand.addListener(
   (command) => {
