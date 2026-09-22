@@ -742,11 +742,12 @@ async function exitCleanMode(
 
 async function switchCleanTab(
   direction,
-  requestedTab = null
+  requestedTab = undefined
 ) {
   const cleanTab =
-    requestedTab ??
-    await getFocusedTab();
+    requestedTab === undefined
+      ? await getFocusedTab()
+      : requestedTab;
 
   if (
     !cleanTab ||
@@ -1114,13 +1115,6 @@ async function toggleTab(tab) {
     tab,
     sessions
   );
-}
-
-async function toggleFocusedTab() {
-  const activeTab =
-    await getFocusedTab();
-
-  await toggleTab(activeTab);
 }
 
 async function removeClosedCleanSession(
