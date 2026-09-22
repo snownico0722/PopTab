@@ -1,6 +1,8 @@
 (() => {
   const MIN_WIDTH = 240;
   const MIN_HEIGHT = 135;
+  const MAX_VISIBLE_LARGE_VIDEOS = 3;
+  const SCAN_INTERVAL_MS = 50;
   const BUTTON_GAP = 8;
   const HOVER_LEFT = 150;
   const HOVER_RIGHT = 24;
@@ -17,6 +19,8 @@
   let lastPointer = null;
   let pointerOnButton = false;
   let scanFrame = 0;
+  let scanTimer = 0;
+  let lastScanAt = 0;
   let hoverFrame = 0;
   let mutationObserver = null;
   let resizeObserver = null;
@@ -27,25 +31,10 @@
       video.getBoundingClientRect();
 
     if (
-      rect.width < MIN_WIDTH ||
-      rect.height < MIN_HEIGHT ||
       rect.right <= 0 ||
       rect.bottom <= 0 ||
       rect.left >= window.innerWidth ||
       rect.top >= window.innerHeight
-    ) {
-      return null;
-    }
-
-    const style =
-      window.getComputedStyle(video);
-
-    if (
-      style.display === "none" ||
-      style.visibility === "hidden" ||
-      Number.parseFloat(
-        style.opacity || "1"
-      ) <= 0
     ) {
       return null;
     }
@@ -70,6 +59,32 @@
           Math.max(rect.top, 0)
       );
 
+    /*
+     * "Large video" means the portion that is
+     * actually visible in the current viewport.
+     * A huge off-screen/preloaded video therefore
+     * does not count toward the page limit.
+     */
+    if (
+      visibleWidth < MIN_WIDTH ||
+      visibleHeight < MIN_HEIGHT
+    ) {
+      return null;
+    }
+
+    const style =
+      window.getComputedStyle(video);
+
+    if (
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      Number.parseFloat(
+        style.opacity || "1"
+      ) <= 0
+    ) {
+      return null;
+    }
+
     return {
       video,
       rect,
@@ -81,24 +96,43 @@
 
   function findPrimaryVideo() {
     const videos =
-      document.querySelectorAll("video");
+      document.getElementsByTagName(
+        "video"
+      );
 
     hasAnyVideo =
       videos.length > 0;
 
     let best = null;
+    let visibleLargeCount = 0;
 
     for (const video of videos) {
       const candidate =
         inspectVideo(video);
 
+      if (!candidate) {
+        continue;
+      }
+
+      visibleLargeCount += 1;
+
+      /*
+       * PopTab targets pages with one obvious main
+       * player. If four large videos are visible at
+       * once, stop immediately instead of spending
+       * more work trying to rank a video feed.
+       */
       if (
-        candidate &&
-        (
-          !best ||
-          candidate.area >
-            best.area
-        )
+        visibleLargeCount >
+        MAX_VISIBLE_LARGE_VIDEOS
+      ) {
+        return null;
+      }
+
+      if (
+        !best ||
+        candidate.area >
+          best.area
       ) {
         best = candidate;
       }
@@ -308,12 +342,52 @@
       !running ||
       !lastPointer ||
       !activeVideo ||
-      !activeRect ||
       document.fullscreenElement
     ) {
       setButtonVisible(false);
       return;
     }
+
+    /*
+     * Layout can move a video without changing the
+     * video element itself. Refresh only the active
+     * video's rect here; do not rescan every video on
+     * every pointer frame.
+     */
+    const rect =
+      activeVideo.getBoundingClientRect();
+
+    const visibleWidth =
+      Math.max(
+        0,
+        Math.min(
+          rect.right,
+          window.innerWidth
+        ) -
+          Math.max(rect.left, 0)
+      );
+
+    const visibleHeight =
+      Math.max(
+        0,
+        Math.min(
+          rect.bottom,
+          window.innerHeight
+        ) -
+          Math.max(rect.top, 0)
+      );
+
+    if (
+      visibleWidth < MIN_WIDTH ||
+      visibleHeight < MIN_HEIGHT
+    ) {
+      activeRect = rect;
+      setButtonVisible(false);
+      return;
+    }
+
+    activeRect = rect;
+    positionButton(rect);
 
     setButtonVisible(
       pointerOnButton ||
@@ -508,15 +582,52 @@
   function scheduleScan() {
     if (
       !running ||
-      scanFrame
+      scanFrame ||
+      scanTimer
     ) {
       return;
     }
 
-    scanFrame =
-      requestAnimationFrame(
-        scan
+    const elapsed =
+      performance.now() -
+      lastScanAt;
+
+    const delay =
+      Math.max(
+        0,
+        SCAN_INTERVAL_MS -
+          elapsed
       );
+
+    const queueFrame = () => {
+      scanTimer = 0;
+
+      if (
+        !running ||
+        scanFrame
+      ) {
+        return;
+      }
+
+      scanFrame =
+        requestAnimationFrame(
+          () => {
+            lastScanAt =
+              performance.now();
+            scan();
+          }
+        );
+    };
+
+    if (delay === 0) {
+      queueFrame();
+    } else {
+      scanTimer =
+        window.setTimeout(
+          queueFrame,
+          delay
+        );
+    }
   }
 
   function nodeContainsVideo(
@@ -561,17 +672,12 @@
         }
       }
 
-      for (
-        const node of
-        record.removedNodes
-      ) {
-        if (
-          nodeContainsVideo(node)
-        ) {
-          scheduleScan();
-          return;
-        }
-      }
+      /*
+       * Removed subtrees do not need a recursive
+       * video search. The active-video disconnect
+       * check above already covers the only removal
+       * that can invalidate the current selection.
+       */
     }
   }
 
@@ -688,6 +794,13 @@
       );
       scanFrame = 0;
     }
+
+    if (scanTimer) {
+      clearTimeout(scanTimer);
+      scanTimer = 0;
+    }
+
+    lastScanAt = 0;
 
     if (hoverFrame) {
       cancelAnimationFrame(
