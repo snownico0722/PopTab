@@ -41,6 +41,7 @@ That makes it useful for:
 - Uses a lightweight content script on HTTP(S) pages only to detect large visible videos and show the hover `浮窗` action
 - Includes no analytics, telemetry, ads, accounts, or external services
 - Lets you enter clean-window mode by clicking the toolbar icon
+- Adds an Options page for choosing whether clicking `×` should write the closed PopTab session back to its source window
 
 ## Default shortcuts
 
@@ -56,6 +57,15 @@ Shortcuts can be changed from the browser's extension-shortcut settings:
 - Chrome: `chrome://extensions/shortcuts`
 
 Click the PopTab toolbar icon to enter clean-window mode. Keyboard shortcuts remain available for entering, exiting, and switching tabs.
+
+## Close behavior setting
+
+Right-click the PopTab extension icon and open **Options** to choose what happens when you close a PopTab window with the title-bar `×`:
+
+- **Do not write back** — default; closing the PopTab window closes that tab.
+- **Write back to the source window** — Chromium restores the just-closed PopTab browser session, then PopTab places the restored tab back into its original browser window and logical position.
+
+`Ctrl+Shift+F` always uses the normal live-tab return path and writes the tab back regardless of this setting.
 
 ## How it works
 

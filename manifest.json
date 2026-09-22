@@ -17,7 +17,8 @@
     "default_title": "PopTab"
   },
   "permissions": [
-    "storage"
+    "storage",
+    "sessions"
   ],
   "background": {
     "service_worker": "background.js"
@@ -54,5 +55,9 @@
       "run_at": "document_idle",
       "all_frames": true
     }
-  ]
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  }
 }
