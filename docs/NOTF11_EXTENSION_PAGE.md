@@ -67,9 +67,7 @@ Shortcuts can be changed from the browser's extension-shortcut settings:
 - Brave: `brave://extensions/shortcuts`
 - Chrome: `chrome://extensions/shortcuts`
 
-PopTab is intentionally keyboard-driven.
-
-Chromium may display the PopTab icon in its Extensions menu or allow the icon to be pinned to the browser toolbar. The icon currently has no click action; the keyboard shortcuts are the controls for PopTab.
+Click the PopTab toolbar icon to enter clean-window mode. Keyboard shortcuts remain available for entering, exiting, and switching tabs.
 
 ## Multiple clean windows
 
@@ -121,7 +119,7 @@ PopTab does not attempt to guess the tab's previous source window or tab index a
 
 ## Small, focused, and private
 
-PopTab does not inject scripts into websites or read or modify webpage content.
+PopTab uses a lightweight content script on HTTP(S) pages to detect large visible videos and show the hover `浮窗` action. Detection stays local in the page and stops while the tab is already in a PopTab popup.
 
 It has:
 
@@ -129,11 +127,9 @@ It has:
 - No ads or tracking
 - No account or sign-in
 - No cloud service
-- No host permissions
-- No content scripts
 - No webpage-content collection
 
-The extension currently requests only the `storage` permission, which is used for PopTab's own clean-window session state.
+The extension's only explicit permission is `storage`, used for PopTab's clean-window session state. The content script is declared for HTTP(S) pages solely for local video detection and the in-page hover action.
 
 Window, tab, keyboard-command, and extension-icon behavior use standard Chromium extension APIs.
 
@@ -163,7 +159,7 @@ Additional browser and operating-system testing is welcome.
 - Windows and Chromium may clamp window geometry by a few pixels when a window touches a display edge.
 - After a complete browser restart, a restored clean popup no longer knows its previous source relationship. `Ctrl+Shift+F` safely recovers it into a normal browser window instead.
 - Browser-reserved shortcuts or conflicts with other extensions may require changing the default shortcuts.
-- The extension icon has no click action. The current PopTab interface is intentionally keyboard-driven.
+- The toolbar icon enters clean-window mode; keyboard shortcuts remain available for enter/exit and tab switching.
 
 ## What PopTab is not
 
