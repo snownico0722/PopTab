@@ -11,6 +11,7 @@
 
   let running = false;
   let hasAnyVideo = false;
+  let tooManyVisibleLargeVideos = false;
   let activeVideo = null;
   let activeRect = null;
   let button = null;
@@ -106,6 +107,9 @@
     let best = null;
     let visibleLargeCount = 0;
 
+    tooManyVisibleLargeVideos =
+      false;
+
     for (const video of videos) {
       const candidate =
         inspectVideo(video);
@@ -126,6 +130,8 @@
         visibleLargeCount >
         MAX_VISIBLE_LARGE_VIDEOS
       ) {
+        tooManyVisibleLargeVideos =
+          true;
         return null;
       }
 
@@ -659,6 +665,24 @@
       return;
     }
 
+    if (
+      tooManyVisibleLargeVideos &&
+      records.some(
+        (record) =>
+          record.removedNodes.length >
+          0
+      )
+    ) {
+      /*
+       * While excluded, any removal might reduce the
+       * visible-large-video count from four to three.
+       * Recheck without recursively walking the
+       * removed subtree.
+       */
+      scheduleScan();
+      return;
+    }
+
     for (const record of records) {
       for (
         const node of
@@ -846,6 +870,7 @@
     activeVideo = null;
     activeRect = null;
     hasAnyVideo = false;
+    tooManyVisibleLargeVideos = false;
     lastPointer = null;
     pointerOnButton = false;
     buttonVisible = false;
