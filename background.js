@@ -1,4 +1,4 @@
-console.log("NotF11 service worker started.");
+console.log("PopTab service worker started.");
 
 const TOGGLE_COMMAND = "toggle-clean-window";
 const NEXT_CLEAN_TAB_COMMAND = "next-clean-tab";
@@ -957,7 +957,7 @@ async function recoverUntrackedPopup(
 ) {
   /*
    * A full browser restart can restore a previous
-   * clean popup after NotF11 has correctly discarded
+   * clean popup after PopTab has correctly discarded
    * the old return ticket.
    *
    * The original source window can no longer be
@@ -1073,7 +1073,7 @@ async function toggleTab(tab) {
     );
 
   /*
-   * A popup without a valid NotF11 session may be
+   * A popup without a valid PopTab session may be
    * a clean window restored by Chromium after a
    * complete browser restart.
    *
@@ -1094,13 +1094,13 @@ async function toggleTab(tab) {
 
   /*
    * Do not reinterpret other special Chromium window
-   * types as NotF11 clean windows.
+   * types as PopTab clean windows.
    */
   if (
     currentWindow.type !== "normal"
   ) {
     console.log(
-      "This window type is not supported by NotF11."
+      "This window type is not supported by PopTab."
     );
 
     return;
