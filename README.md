@@ -84,5 +84,5 @@ Until packaged releases and browser-store installation are available, PopTab can
 1. Clone or download this repository:
 
    ```powershell
-   git clone https://github.com/Magik23/PopTab.git
+   git clone https://github.com/snownico0722/PopTab.git
    cd PopTab
