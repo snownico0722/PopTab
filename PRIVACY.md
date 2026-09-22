@@ -1,12 +1,12 @@
-# NotF11 Privacy Policy
+# PopTab Privacy Policy
 
 **Last updated: August 27, 2026**
 
-NotF11 does not collect, transmit, sell, share, or otherwise process personal or sensitive user data.
+PopTab does not collect, transmit, sell, share, or otherwise process personal or sensitive user data.
 
 ## Data collection
 
-NotF11 does not collect:
+PopTab does not collect:
 
 - Personally identifiable information
 - Authentication information
@@ -19,7 +19,7 @@ NotF11 does not collect:
 
 ## Local extension state
 
-NotF11 uses the Chromium `storage` permission solely to store local extension state required for its clean-window functionality.
+PopTab uses the Chromium `storage` permission solely to store local extension state required for its clean-window functionality.
 
 This state may include browser tab and window identifiers, tab order, pinned-tab state, and window geometry.
 
@@ -32,11 +32,11 @@ This information:
 
 ## Remote services
 
-NotF11 does not use remote code, analytics, telemetry, advertising services, cloud services, or third-party data processors.
+PopTab does not use remote code, analytics, telemetry, advertising services, cloud services, or third-party data processors.
 
 ## Changes to this policy
 
-If NotF11's data practices change in a future version, this privacy policy will be updated before those changes are released.
+If PopTab's data practices change in a future version, this privacy policy will be updated before those changes are released.
 
 ## Contact
 
