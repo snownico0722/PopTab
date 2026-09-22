@@ -1,24 +1,24 @@
-# NotF11
+# PopTab
 
 ## Any browser tab, toolbar-free.
 
 **Turn it into a clean, resizable window.**
 
-NotF11 removes the browser interface around your current tab—no tab strip, address bar, bookmarks bar, navigation buttons, or extension controls.
+PopTab removes the browser interface around your current tab—no tab strip, address bar, bookmarks bar, navigation buttons, or extension controls.
 
 What remains is the same live page inside a clean desktop window you can move, resize, maximize, snap, and arrange alongside your other applications.
 
-Unlike F11 fullscreen, NotF11 does not take over your entire display.
+Unlike F11 fullscreen, PopTab does not take over your entire display.
 
 **One shortcut in. The same shortcut out.**
 
 ## The same live tab, with more room
 
-Press `Ctrl+Shift+F` and NotF11 moves the current live tab into a clean Chromium window.
+Press `Ctrl+Shift+F` and PopTab moves the current live tab into a clean Chromium window.
 
 Press it again and the same tab returns to its source browser window.
 
-Because NotF11 moves the existing tab instead of reopening its URL, active page state stays with it—including:
+Because PopTab moves the existing tab instead of reopening its URL, active page state stays with it—including:
 
 - Scroll position
 - Entered text
@@ -26,11 +26,11 @@ Because NotF11 moves the existing tab instead of reopening its URL, active page 
 - In-page progress
 - Active web-app state
 
-NotF11 does not recreate the page.
+PopTab does not recreate the page.
 
 ## Toolbar-free, still a real desktop window
 
-NotF11 removes the browser controls, not the operating system's window frame.
+PopTab removes the browser controls, not the operating system's window frame.
 
 The clean window remains:
 
@@ -45,7 +45,7 @@ This gives the page more room without locking you into fullscreen.
 
 ## Built for pages that deserve their own space
 
-NotF11 works especially well with:
+PopTab works especially well with:
 
 - ChatGPT and other AI tools
 - Web apps and dashboards
@@ -67,13 +67,13 @@ Shortcuts can be changed from the browser's extension-shortcut settings:
 - Brave: `brave://extensions/shortcuts`
 - Chrome: `chrome://extensions/shortcuts`
 
-NotF11 is intentionally keyboard-driven.
+PopTab is intentionally keyboard-driven.
 
-Chromium may display the NotF11 icon in its Extensions menu or allow the icon to be pinned to the browser toolbar. The icon currently has no click action; the keyboard shortcuts are the controls for NotF11.
+Chromium may display the PopTab icon in its Extensions menu or allow the icon to be pinned to the browser toolbar. The icon currently has no click action; the keyboard shortcuts are the controls for PopTab.
 
 ## Multiple clean windows
 
-NotF11 can track multiple independent clean windows at the same time.
+PopTab can track multiple independent clean windows at the same time.
 
 Each clean tab keeps its own return information, including its source browser window and logical tab position.
 
@@ -83,23 +83,23 @@ Tabs already detached into other clean windows are skipped while cycling through
 
 Browser-pinned tabs are supported.
 
-If a pinned tab enters clean mode, NotF11 remembers its pinned state and restores it when the tab returns to its source browser window.
+If a pinned tab enters clean mode, PopTab remembers its pinned state and restores it when the tab returns to its source browser window.
 
 Logical placement is reconstructed against the current tab strip, so the tab remains inside Chromium's pinned-tab region even if the source window changes while the tab is away.
 
 ## Recovery behavior
 
-NotF11 includes recovery behavior for several browser-window lifecycle situations.
+PopTab includes recovery behavior for several browser-window lifecycle situations.
 
 ### If the source browser window is closed
 
-If a clean tab's original source browser window disappears while the browser is still running, NotF11 preserves the live tab and recovers it into a replacement normal browser window when it returns from clean mode.
+If a clean tab's original source browser window disappears while the browser is still running, PopTab preserves the live tab and recovers it into a replacement normal browser window when it returns from clean mode.
 
 Sibling clean tabs that belonged to the same missing source are redirected to that replacement window.
 
 ### If a clean popup is manually closed
 
-The corresponding stored NotF11 session is automatically removed.
+The corresponding stored PopTab session is automatically removed.
 
 ### If the extension service worker reloads
 
@@ -115,13 +115,13 @@ If that happens, press:
 
 `Ctrl+Shift+F`
 
-NotF11 will move the same restored live tab into a normal browser window so the address bar and browser controls are available again.
+PopTab will move the same restored live tab into a normal browser window so the address bar and browser controls are available again.
 
-NotF11 does not attempt to guess the tab's previous source window or tab index across a complete browser restart.
+PopTab does not attempt to guess the tab's previous source window or tab index across a complete browser restart.
 
 ## Small, focused, and private
 
-NotF11 does not inject scripts into websites or read or modify webpage content.
+PopTab does not inject scripts into websites or read or modify webpage content.
 
 It has:
 
@@ -133,13 +133,13 @@ It has:
 - No content scripts
 - No webpage-content collection
 
-The extension currently requests only the `storage` permission, which is used for NotF11's own clean-window session state.
+The extension currently requests only the `storage` permission, which is used for PopTab's own clean-window session state.
 
 Window, tab, keyboard-command, and extension-icon behavior use standard Chromium extension APIs.
 
 ## Compatibility
 
-NotF11 has been tested with:
+PopTab has been tested with:
 
 - Brave Desktop on Windows 11
 - Google Chrome on Windows 11
@@ -151,7 +151,7 @@ Its window-management workflow has also been extensively tested with:
 - Multiple browser windows
 - Multiple clean windows
 
-NotF11 uses standard Chromium Manifest V3 APIs and is expected to work with other Chromium-based desktop browsers that provide the same APIs.
+PopTab uses standard Chromium Manifest V3 APIs and is expected to work with other Chromium-based desktop browsers that provide the same APIs.
 
 Additional browser and operating-system testing is welcome.
 
@@ -163,9 +163,9 @@ Additional browser and operating-system testing is welcome.
 - Windows and Chromium may clamp window geometry by a few pixels when a window touches a display edge.
 - After a complete browser restart, a restored clean popup no longer knows its previous source relationship. `Ctrl+Shift+F` safely recovers it into a normal browser window instead.
 - Browser-reserved shortcuts or conflicts with other extensions may require changing the default shortcuts.
-- The extension icon has no click action. The current NotF11 interface is intentionally keyboard-driven.
+- The extension icon has no click action. The current PopTab interface is intentionally keyboard-driven.
 
-## What NotF11 is not
+## What PopTab is not
 
 - **Not fullscreen:** it does not occupy or take over the entire display.
 - **Not picture-in-picture:** it works with regular webpages, not only video.
@@ -175,11 +175,11 @@ Additional browser and operating-system testing is welcome.
 
 ## Open source
 
-NotF11 is open source.
+PopTab is open source.
 
-- [Source code](https://github.com/Magik23/NotF11)
-- [Report an issue](https://github.com/Magik23/NotF11/issues)
-- [Releases](https://github.com/Magik23/NotF11/releases)
+- [Source code](https://github.com/snownico0722/PopTab)
+- [Report an issue](https://github.com/snownico0722/PopTab/issues)
+- [Releases](https://github.com/snownico0722/PopTab/releases)
 
 Created by [Pierre Dionne](https://github.com/Magik23) through [Albenoir Studio](https://albenoir.com).
 
@@ -193,4 +193,4 @@ Press `Ctrl+Shift+F`.
 
 Keep the page. Lose the browser clutter.
 
-**NotF11 — Any browser tab, toolbar-free.**
+**PopTab — Any browser tab, toolbar-free.**
