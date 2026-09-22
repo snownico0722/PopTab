@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "NotF11",
+  "name": "PopTab",
   "version": "0.1.0",
-  "description": "Any browser tab, toolbar-free. Turn it into a clean, resizable window.",
+  "description": "Pop any browser tab into a clean, resizable window, with a hover action for large videos.",
   "icons": {
     "16": "assets/icons/icon-16.png",
     "32": "assets/icons/icon-32.png",
@@ -14,7 +14,7 @@
       "16": "assets/icons/icon-16.png",
       "32": "assets/icons/icon-32.png"
     },
-    "default_title": "NotF11"
+    "default_title": "PopTab"
   },
   "permissions": [
     "storage"
