@@ -69,15 +69,6 @@ Shortcuts can be changed from the browser's extension-shortcut settings:
 
 Click the PopTab toolbar icon to enter clean-window mode. Keyboard shortcuts remain available for entering, exiting, and switching tabs.
 
-## Close-button behavior
-
-Right-click the PopTab extension icon and open **Options** to choose what the title-bar `×` does:
-
-- **Do not write back** — default; closing the PopTab window closes that tab.
-- **Write back to the source window** — PopTab restores the just-closed Chromium browser session and places the restored tab back into its source browser window and logical position.
-
-`Ctrl+Shift+F` always writes the live tab back directly and is not affected by this option.
-
 ## Multiple clean windows
 
 PopTab can track multiple independent clean windows at the same time.
@@ -106,7 +97,7 @@ Sibling clean tabs that belonged to the same missing source are redirected to th
 
 ### If a clean popup is manually closed
 
-By default, the corresponding stored PopTab session is removed and the tab remains closed. If **write back to the source window** is enabled in Options, PopTab uses Chromium session restore to reopen that just-closed popup session and then returns the restored tab to its source browser window.
+The corresponding stored PopTab session is automatically removed.
 
 ### If the extension service worker reloads
 
@@ -138,7 +129,7 @@ It has:
 - No cloud service
 - No webpage-content collection
 
-The extension requests `storage` for PopTab's clean-window state and settings, plus `sessions` for the optional close-button writeback feature. The content script is declared for HTTP(S) pages solely for local video detection and the in-page hover action.
+The extension's only explicit permission is `storage`, used for PopTab's clean-window session state. The content script is declared for HTTP(S) pages solely for local video detection and the in-page hover action.
 
 Window, tab, keyboard-command, and extension-icon behavior use standard Chromium extension APIs.
 
@@ -176,7 +167,7 @@ Additional browser and operating-system testing is welcome.
 - **Not picture-in-picture:** it works with regular webpages, not only video.
 - **Not app mode:** no special site installation or separate launch command is required.
 - **Not a duplicate page:** it keeps the live tab you already have open.
-- **Not a replacement webpage:** PopTab's main clean-window path keeps the live tab; the lightweight content script only adds the local video hover action.
+- **Not a webpage modification:** it does not inject UI or scripts into the site.
 
 ## Open source
 
