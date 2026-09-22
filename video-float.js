@@ -7,81 +7,100 @@
   const HOVER_ABOVE = 58;
   const HOVER_BELOW = 56;
 
+  let running = false;
+  let hasAnyVideo = false;
   let activeVideo = null;
+  let activeRect = null;
   let button = null;
-  let resizeObserver = null;
-  let scanScheduled = false;
+  let buttonVisible = false;
+  let pointerTracking = false;
   let lastPointer = null;
+  let pointerOnButton = false;
+  let scanFrame = 0;
+  let hoverFrame = 0;
+  let mutationObserver = null;
+  let resizeObserver = null;
+  let activeAttributeObserver = null;
 
-  function isVisibleVideo(video) {
+  function inspectVideo(video) {
     const rect =
       video.getBoundingClientRect();
 
     if (
       rect.width < MIN_WIDTH ||
-      rect.height < MIN_HEIGHT
-    ) {
-      return false;
-    }
-
-    if (
+      rect.height < MIN_HEIGHT ||
       rect.right <= 0 ||
       rect.bottom <= 0 ||
       rect.left >= window.innerWidth ||
       rect.top >= window.innerHeight
     ) {
-      return false;
+      return null;
     }
 
     const style =
       window.getComputedStyle(video);
 
-    return (
-      style.display !== "none" &&
-      style.visibility !== "hidden" &&
-      Number.parseFloat(style.opacity || "1") > 0
-    );
-  }
+    if (
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      Number.parseFloat(
+        style.opacity || "1"
+      ) <= 0
+    ) {
+      return null;
+    }
 
-  function visibleArea(video) {
-    const rect =
-      video.getBoundingClientRect();
-
-    const width =
+    const visibleWidth =
       Math.max(
         0,
-        Math.min(rect.right, window.innerWidth) -
+        Math.min(
+          rect.right,
+          window.innerWidth
+        ) -
           Math.max(rect.left, 0)
       );
 
-    const height =
+    const visibleHeight =
       Math.max(
         0,
-        Math.min(rect.bottom, window.innerHeight) -
+        Math.min(
+          rect.bottom,
+          window.innerHeight
+        ) -
           Math.max(rect.top, 0)
       );
 
-    return width * height;
+    return {
+      video,
+      rect,
+      area:
+        visibleWidth *
+        visibleHeight
+    };
   }
 
   function findPrimaryVideo() {
+    const videos =
+      document.querySelectorAll("video");
+
+    hasAnyVideo =
+      videos.length > 0;
+
     let best = null;
-    let bestArea = 0;
 
-    for (
-      const video of
-      document.querySelectorAll("video")
-    ) {
-      if (!isVisibleVideo(video)) {
-        continue;
-      }
+    for (const video of videos) {
+      const candidate =
+        inspectVideo(video);
 
-      const area =
-        visibleArea(video);
-
-      if (area > bestArea) {
-        best = video;
-        bestArea = area;
+      if (
+        candidate &&
+        (
+          !best ||
+          candidate.area >
+            best.area
+        )
+      ) {
+        best = candidate;
       }
     }
 
@@ -112,27 +131,28 @@
         display: "block",
         boxSizing: "border-box",
         padding: "5px 10px",
-        border: "1px solid rgba(255,255,255,.18)",
+        border:
+          "1px solid rgba(255,255,255,.18)",
         borderRadius: "7px",
-        background: "rgba(24,24,27,.88)",
+        background:
+          "rgba(24,24,27,.88)",
         color: "#fff",
-        font: "12px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif",
+        font:
+          "12px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif",
         cursor: "pointer",
-        boxShadow: "0 2px 10px rgba(0,0,0,.25)",
-        backdropFilter: "blur(8px)",
-        WebkitBackdropFilter: "blur(8px)",
+        boxShadow:
+          "0 2px 10px rgba(0,0,0,.25)",
+        backdropFilter:
+          "blur(8px)",
+        WebkitBackdropFilter:
+          "blur(8px)",
         opacity: "0",
-        transform: "translateY(3px)",
-        transition: "opacity 120ms ease, transform 120ms ease",
+        transform:
+          "translateY(3px)",
+        transition:
+          "opacity 120ms ease, transform 120ms ease",
         pointerEvents: "none",
         userSelect: "none"
-      }
-    );
-
-    button.addEventListener(
-      "mouseenter",
-      () => {
-        showButton();
       }
     );
 
@@ -150,14 +170,17 @@
               "notf11-open-video-float"
           },
           () => {
-            button.disabled = false;
+            if (button) {
+              button.disabled = false;
+            }
 
             if (
               chrome.runtime.lastError
             ) {
               console.debug(
                 "NotF11 video float:",
-                chrome.runtime.lastError.message
+                chrome.runtime
+                  .lastError.message
               );
             }
           }
@@ -166,65 +189,65 @@
       true
     );
 
-    document.documentElement.appendChild(
-      button
-    );
+    document.documentElement
+      .appendChild(button);
 
     return button;
   }
 
-  function hideButton() {
-    if (!button) {
-      return;
-    }
-
-    button.style.opacity = "0";
-    button.style.transform =
-      "translateY(3px)";
-    button.style.pointerEvents =
-      "none";
-  }
-
-  function showButton() {
+  function setButtonVisible(
+    visible
+  ) {
     if (
-      !activeVideo ||
-      document.fullscreenElement
+      !button ||
+      buttonVisible === visible
     ) {
-      hideButton();
       return;
     }
 
-    positionButton();
-    button.style.opacity = "1";
-    button.style.transform =
-      "translateY(0)";
-    button.style.pointerEvents =
-      "auto";
+    buttonVisible = visible;
+
+    if (visible) {
+      button.style.opacity = "1";
+      button.style.transform =
+        "translateY(0)";
+      button.style.pointerEvents =
+        "auto";
+    } else {
+      button.style.opacity = "0";
+      button.style.transform =
+        "translateY(3px)";
+      button.style.pointerEvents =
+        "none";
+    }
   }
 
-  function positionButton() {
+  function positionButton(
+    rect = activeRect
+  ) {
     if (
       !activeVideo ||
+      !rect ||
       !button
     ) {
       return;
     }
 
-    const rect =
-      activeVideo.getBoundingClientRect();
+    activeRect = rect;
 
-    const buttonRect =
-      button.getBoundingClientRect();
+    const width =
+      button.offsetWidth;
+    const height =
+      button.offsetHeight;
 
     const left =
       Math.min(
         window.innerWidth -
-          buttonRect.width -
+          width -
           8,
         Math.max(
           8,
-          rect.right -
-            buttonRect.width
+          rect.right - width
         )
       );
 
@@ -232,221 +255,532 @@
       Math.max(
         8,
         rect.top -
-          buttonRect.height -
+          height -
           BUTTON_GAP
       );
 
-    button.style.left =
+    const nextLeft =
       `${Math.round(left)}px`;
-
-    button.style.top =
+    const nextTop =
       `${Math.round(top)}px`;
+
+    if (
+      button.style.left !==
+      nextLeft
+    ) {
+      button.style.left =
+        nextLeft;
+    }
+
+    if (
+      button.style.top !==
+      nextTop
+    ) {
+      button.style.top =
+        nextTop;
+    }
   }
 
   function pointerNearVideoCorner(
     x,
     y
   ) {
-    if (!activeVideo) {
+    const rect = activeRect;
+
+    if (!rect) {
       return false;
     }
 
-    const rect =
-      activeVideo.getBoundingClientRect();
-
     return (
-      x >= rect.right - HOVER_LEFT &&
-      x <= rect.right + HOVER_RIGHT &&
-      y >= rect.top - HOVER_ABOVE &&
-      y <= rect.top + HOVER_BELOW
-    );
-  }
-
-  function pointerOverButton(
-    x,
-    y
-  ) {
-    if (
-      !button ||
-      button.style.pointerEvents ===
-        "none"
-    ) {
-      return false;
-    }
-
-    const rect =
-      button.getBoundingClientRect();
-
-    return (
-      x >= rect.left &&
-      x <= rect.right &&
-      y >= rect.top &&
-      y <= rect.bottom
+      x >=
+        rect.right - HOVER_LEFT &&
+      x <=
+        rect.right + HOVER_RIGHT &&
+      y >=
+        rect.top - HOVER_ABOVE &&
+      y <=
+        rect.top + HOVER_BELOW
     );
   }
 
   function refreshHoverState() {
     if (
+      !running ||
       !lastPointer ||
-      !activeVideo
+      !activeVideo ||
+      !activeRect ||
+      document.fullscreenElement
     ) {
-      hideButton();
+      setButtonVisible(false);
       return;
     }
 
+    setButtonVisible(
+      pointerOnButton ||
+        pointerNearVideoCorner(
+          lastPointer.x,
+          lastPointer.y
+        )
+    );
+  }
+
+  function scheduleHoverRefresh() {
     if (
-      pointerNearVideoCorner(
-        lastPointer.x,
-        lastPointer.y
-      ) ||
-      pointerOverButton(
-        lastPointer.x,
-        lastPointer.y
-      )
+      !running ||
+      hoverFrame
     ) {
-      showButton();
+      return;
+    }
+
+    hoverFrame =
+      requestAnimationFrame(
+        () => {
+          hoverFrame = 0;
+          refreshHoverState();
+        }
+      );
+  }
+
+  function onPointerMove(event) {
+    lastPointer = {
+      x: event.clientX,
+      y: event.clientY
+    };
+
+    pointerOnButton =
+      event.target === button;
+
+    scheduleHoverRefresh();
+  }
+
+  function onPointerLeave() {
+    lastPointer = null;
+    pointerOnButton = false;
+    setButtonVisible(false);
+  }
+
+  function setPointerTracking(
+    enabled
+  ) {
+    if (
+      pointerTracking === enabled
+    ) {
+      return;
+    }
+
+    pointerTracking = enabled;
+
+    if (enabled) {
+      document.addEventListener(
+        "pointermove",
+        onPointerMove,
+        {
+          capture: true,
+          passive: true
+        }
+      );
+
+      document.addEventListener(
+        "pointerleave",
+        onPointerLeave,
+        {
+          capture: true,
+          passive: true
+        }
+      );
     } else {
-      hideButton();
+      document.removeEventListener(
+        "pointermove",
+        onPointerMove,
+        true
+      );
+
+      document.removeEventListener(
+        "pointerleave",
+        onPointerLeave,
+        true
+      );
+
+      lastPointer = null;
+      pointerOnButton = false;
     }
   }
 
-  function observeActiveVideo(video) {
+  function disconnectVideoObservers() {
     if (resizeObserver) {
       resizeObserver.disconnect();
       resizeObserver = null;
     }
 
-    activeVideo = video;
+    if (
+      activeAttributeObserver
+    ) {
+      activeAttributeObserver
+        .disconnect();
 
-    if (!video) {
-      hideButton();
+      activeAttributeObserver =
+        null;
+    }
+  }
+
+  function observeActiveVideo(
+    candidate
+  ) {
+    disconnectVideoObservers();
+
+    activeVideo =
+      candidate?.video ?? null;
+
+    activeRect =
+      candidate?.rect ?? null;
+
+    if (!activeVideo) {
+      setPointerTracking(false);
+      setButtonVisible(false);
       return;
     }
 
-    resizeObserver =
-      new ResizeObserver(() => {
-        positionButton();
-        refreshHoverState();
-      });
-
-    resizeObserver.observe(video);
-
     ensureButton();
-    positionButton();
+    setPointerTracking(true);
+
+    resizeObserver =
+      new ResizeObserver(
+        scheduleScan
+      );
+
+    resizeObserver.observe(
+      activeVideo
+    );
+
+    activeAttributeObserver =
+      new MutationObserver(
+        scheduleScan
+      );
+
+    activeAttributeObserver.observe(
+      activeVideo,
+      {
+        attributes: true,
+        attributeFilter: [
+          "class",
+          "style",
+          "hidden"
+        ]
+      }
+    );
+
+    positionButton(activeRect);
     refreshHoverState();
   }
 
   function scan() {
-    scanScheduled = false;
+    scanFrame = 0;
 
-    const nextVideo =
+    if (!running) {
+      return;
+    }
+
+    const candidate =
       findPrimaryVideo();
 
     if (
-      nextVideo !== activeVideo
+      candidate?.video !==
+      activeVideo
     ) {
       observeActiveVideo(
-        nextVideo
+        candidate
       );
       return;
     }
 
-    positionButton();
+    activeRect =
+      candidate?.rect ?? null;
+
+    if (activeVideo) {
+      positionButton(
+        activeRect
+      );
+    }
+
     refreshHoverState();
   }
 
   function scheduleScan() {
-    if (scanScheduled) {
+    if (
+      !running ||
+      scanFrame
+    ) {
       return;
     }
 
-    scanScheduled = true;
-
-    requestAnimationFrame(scan);
+    scanFrame =
+      requestAnimationFrame(
+        scan
+      );
   }
 
-  document.addEventListener(
-    "pointermove",
-    (event) => {
-      lastPointer = {
-        x: event.clientX,
-        y: event.clientY
-      };
-
-      refreshHoverState();
-    },
-    {
-      capture: true,
-      passive: true
+  function nodeContainsVideo(
+    node
+  ) {
+    if (
+      node.nodeType !==
+      Node.ELEMENT_NODE
+    ) {
+      return false;
     }
-  );
 
-  document.addEventListener(
-    "pointerleave",
-    () => {
-      lastPointer = null;
-      hideButton();
-    },
-    {
-      capture: true,
-      passive: true
+    return (
+      node.tagName === "VIDEO" ||
+      Boolean(
+        node.querySelector?.(
+          "video"
+        )
+      )
+    );
+  }
+
+  function onMutations(records) {
+    if (
+      activeVideo &&
+      !activeVideo.isConnected
+    ) {
+      scheduleScan();
+      return;
     }
-  );
 
-  window.addEventListener(
-    "scroll",
-    scheduleScan,
-    {
-      capture: true,
-      passive: true
-    }
-  );
-
-  window.addEventListener(
-    "resize",
-    scheduleScan,
-    {
-      passive: true
-    }
-  );
-
-  document.addEventListener(
-    "fullscreenchange",
-    scheduleScan
-  );
-
-  const mutationObserver =
-    new MutationObserver(
-      (records) => {
-        const externalChange =
-          records.some(
-            (record) =>
-              record.target !==
-                button &&
-              !button?.contains(
-                record.target
-              )
-          );
-
-        if (externalChange) {
+    for (const record of records) {
+      for (
+        const node of
+        record.addedNodes
+      ) {
+        if (
+          nodeContainsVideo(node)
+        ) {
           scheduleScan();
+          return;
+        }
+      }
+
+      for (
+        const node of
+        record.removedNodes
+      ) {
+        if (
+          nodeContainsVideo(node)
+        ) {
+          scheduleScan();
+          return;
+        }
+      }
+    }
+  }
+
+  function onScroll() {
+    if (
+      activeVideo ||
+      hasAnyVideo
+    ) {
+      scheduleScan();
+    }
+  }
+
+  function onResize() {
+    if (
+      activeVideo ||
+      hasAnyVideo
+    ) {
+      scheduleScan();
+    }
+  }
+
+  function onFullscreenChange() {
+    if (
+      document.fullscreenElement
+    ) {
+      setButtonVisible(false);
+      return;
+    }
+
+    if (
+      activeVideo ||
+      hasAnyVideo
+    ) {
+      scheduleScan();
+    }
+  }
+
+  function onMediaEvent(event) {
+    if (
+      event.target instanceof
+        HTMLVideoElement
+    ) {
+      scheduleScan();
+    }
+  }
+
+  function start() {
+    if (running) {
+      return;
+    }
+
+    running = true;
+
+    mutationObserver =
+      new MutationObserver(
+        onMutations
+      );
+
+    mutationObserver.observe(
+      document.documentElement,
+      {
+        childList: true,
+        subtree: true
+      }
+    );
+
+    window.addEventListener(
+      "scroll",
+      onScroll,
+      {
+        capture: true,
+        passive: true
+      }
+    );
+
+    window.addEventListener(
+      "resize",
+      onResize,
+      {
+        passive: true
+      }
+    );
+
+    document.addEventListener(
+      "fullscreenchange",
+      onFullscreenChange
+    );
+
+    document.addEventListener(
+      "play",
+      onMediaEvent,
+      true
+    );
+
+    document.addEventListener(
+      "loadedmetadata",
+      onMediaEvent,
+      true
+    );
+
+    scheduleScan();
+  }
+
+  function stop() {
+    if (!running) {
+      return;
+    }
+
+    running = false;
+
+    if (scanFrame) {
+      cancelAnimationFrame(
+        scanFrame
+      );
+      scanFrame = 0;
+    }
+
+    if (hoverFrame) {
+      cancelAnimationFrame(
+        hoverFrame
+      );
+      hoverFrame = 0;
+    }
+
+    mutationObserver?.disconnect();
+    mutationObserver = null;
+
+    disconnectVideoObservers();
+    setPointerTracking(false);
+
+    window.removeEventListener(
+      "scroll",
+      onScroll,
+      true
+    );
+
+    window.removeEventListener(
+      "resize",
+      onResize
+    );
+
+    document.removeEventListener(
+      "fullscreenchange",
+      onFullscreenChange
+    );
+
+    document.removeEventListener(
+      "play",
+      onMediaEvent,
+      true
+    );
+
+    document.removeEventListener(
+      "loadedmetadata",
+      onMediaEvent,
+      true
+    );
+
+    activeVideo = null;
+    activeRect = null;
+    hasAnyVideo = false;
+    lastPointer = null;
+    pointerOnButton = false;
+    buttonVisible = false;
+
+    if (button) {
+      button.remove();
+      button = null;
+    }
+  }
+
+  chrome.runtime.onMessage
+    .addListener(
+      (message) => {
+        if (
+          message?.type !==
+          "notf11-video-float-enabled"
+        ) {
+          return;
+        }
+
+        if (message.enabled) {
+          start();
+        } else {
+          stop();
         }
       }
     );
 
-  mutationObserver.observe(
-    document.documentElement,
+  chrome.runtime.sendMessage(
     {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: [
-        "class",
-        "style",
-        "hidden"
-      ]
+      type:
+        "notf11-video-float-state"
+    },
+    (response) => {
+      if (
+        chrome.runtime.lastError
+      ) {
+        start();
+        return;
+      }
+
+      if (
+        response?.enabled === false
+      ) {
+        stop();
+      } else {
+        start();
+      }
     }
   );
-
-  scheduleScan();
 })();
