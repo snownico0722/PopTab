@@ -41,8 +41,8 @@ function Write-Preferences([string]$browser, [string]$profile, [hashtable]$setti
 try {
     # No extension: installer should extract the bundled extension and tell
     # the user to load it (exit 7 in CI, no GUI message box).
-    & $exe --setup-silent
-    Assert ($LASTEXITCODE -eq 7) ("Expected missing-extension onboarding status 7; got $LASTEXITCODE")
+    $first = Start-Process -FilePath $exe -ArgumentList '--setup-silent' -Wait -PassThru
+    Assert ($first.ExitCode -eq 7) ("Expected onboarding status 7; got $($first.ExitCode)")
     $install = Join-Path $env:LOCALAPPDATA 'PopTabCompanion'
     $extension = Join-Path $install 'PopTab-extension'
     foreach ($filename in @(
@@ -69,8 +69,8 @@ try {
     Write-Preferences 'Google\Chrome' 'Default' $chromeSettings
     Write-Preferences 'Microsoft\Edge' 'Profile 2' $edgeSettings
 
-    & $exe --setup-silent
-    Assert ($LASTEXITCODE -eq 0) 'Automated EXE setup did not complete'
+    $installed = Start-Process -FilePath $exe -ArgumentList '--setup-silent' -Wait -PassThru
+    Assert ($installed.ExitCode -eq 0) ("Automated EXE setup failed: $($installed.ExitCode)")
     $manifestPath = Join-Path $install 'native-host.json'
     $host = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     Assert ($host.name -eq $hostName) 'Native host name mismatch'
@@ -96,8 +96,8 @@ try {
     }
 
     # A second double click must not duplicate IDs or require reinstallation.
-    & $exe --setup-silent
-    Assert ($LASTEXITCODE -eq 0) 'Repeat setup failed'
+    $again = Start-Process -FilePath $exe -ArgumentList '--setup-silent' -Wait -PassThru
+    Assert ($again.ExitCode -eq 0) ("Repeat setup failed: $($again.ExitCode)")
     $host = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     Assert (@($host.allowed_origins).Count -eq 2) 'Repeat setup changed origin count'
 
