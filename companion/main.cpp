@@ -7,6 +7,7 @@
 #include <gdiplus.h>
 #include <tlhelp32.h>
 #include "setup.h"
+#include "tray.h"
 #include <algorithm>
 #include <charconv>
 #include <cstdint>
@@ -233,9 +234,13 @@ void RefreshPosition(Entry& entry) {
   }
   const UINT dpi = GetDpiForWindow(entry.target);
   const RECT bounds = VisibleBounds(entry.target);
-  const int size = MulDiv(28, dpi, 96);
-  const int x = bounds.left + MulDiv(42, dpi, 96);
-  const int y = bounds.top + MulDiv(2, dpi, 96);
+  // Anchor in the actual Windows caption area, immediately after the
+  // system-menu icon instead of using a fixed offset from the page.
+  const int size = MulDiv(26, dpi, 96);
+  const int captionHeight = std::max(MulDiv(30, dpi, 96),
+      GetSystemMetricsForDpi(SM_CYCAPTION, dpi) + GetSystemMetricsForDpi(SM_CYFRAME, dpi));
+  const int x = bounds.left + MulDiv(30, dpi, 96);
+  const int y = bounds.top + std::max(0, (captionHeight - size) / 2);
   if (bounds.right - x < size + MulDiv(80, dpi, 96)) {
     ShowWindow(entry.button, SW_HIDE);
     return;
@@ -262,6 +267,13 @@ void SetPinned(Entry& entry, bool pinned) {
     entry.pinned = IsPinned(entry.target);
     entry.changedPin = entry.pinned != entry.originalPin;
     DrawButton(entry);
+    // Changing the owner to TOPMOST can leave a layered owned popup behind
+    // it until the next activation. Place the button in the same z-order band
+    // immediately: a second click must not require switching focus.
+    if (IsWindow(entry.button))
+      SetWindowPos(entry.button, entry.pinned ? HWND_TOPMOST : HWND_NOTOPMOST,
+                   0, 0, 0, 0,
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     SendState(entry);
   }
 }
@@ -420,10 +432,14 @@ void ReadCommands(HWND receiver) {
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
   const std::wstring_view args = commandLine ? commandLine : L"";
+  if (args == L"--tray") return RunTray(instance);
   const bool testHost = args == L"--host-test";
   const bool nativeHost = testHost || args.rfind(L"chrome-extension://", 0) == 0 ||
                          args.rfind(L"\"chrome-extension://", 0) == 0;
   if (!nativeHost) return RunSetup(args == L"--setup-silent", args == L"--uninstall-silent");
+  // "退出" from the tray also stops the actual pin service, without a
+  // watchdog recreating it. It resumes at the next logon or manual tray start.
+  if (!testHost && !IsTrayRunning()) return 1;
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   g_input = GetStdHandle(STD_INPUT_HANDLE);
   g_output = GetStdHandle(STD_OUTPUT_HANDLE);
