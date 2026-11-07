@@ -252,8 +252,17 @@ int RunTray(HINSTANCE instance) {
   HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Local\\PopTabCompanion.Tray");
   if (!mutex) return 1;
   if (GetLastError() == ERROR_ALREADY_EXISTS) {
-    CloseHandle(mutex);
-    return 0;
+    // Exit removes the tray window before releasing its single-instance
+    // mutex. Starting it again immediately must not silently do nothing.
+    if (IsTrayRunning()) {
+      CloseHandle(mutex);
+      return 0;
+    }
+    const DWORD wait = WaitForSingleObject(mutex, 1500);
+    if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) {
+      CloseHandle(mutex);
+      return 1;
+    }
   }
 
   ULONG_PTR graphicsToken = 0;
