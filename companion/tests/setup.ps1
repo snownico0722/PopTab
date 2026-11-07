@@ -13,8 +13,18 @@ foreach ($root in $roots) {
 }
 function Assert($ok, [string]$message) { if (-not $ok) { throw $message } }
 function Run-Installer([string]$argument, [int]$expected) {
-    $process = Start-Process -FilePath $exe -ArgumentList $argument -Wait -PassThru
+    Write-Host "Starting $argument; expecting $expected"
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName = $exe
+    $start.Arguments = $argument
+    $start.UseShellExecute = $false
+    $process = [System.Diagnostics.Process]::Start($start)
+    if (-not $process.WaitForExit(20000)) {
+        $process.Kill()
+        throw "Installer timed out: $argument"
+    }
     Assert ($process.ExitCode -eq $expected) "Expected $expected; got $($process.ExitCode)"
+    Write-Host "Finished $argument with $($process.ExitCode)"
 }
 function Write-Json([string]$path, $value) {
     New-Item -ItemType Directory -Force -Path (Split-Path $path) | Out-Null
@@ -38,7 +48,6 @@ try {
     $secure[$decoyId] = @{ state = 1; manifest = @{ name = 'Other extension' } }
     $profile = Join-Path $testRoot 'Google\Chrome\User Data\Default'
     Write-Json (Join-Path $profile 'Secure Preferences') @{ extensions = @{ settings = $secure } }
-    # A stale enabled record in Preferences must not override Secure Preferences.
     $stale = @{}; $stale[$disabledId] = @{ state = 1; manifest = $manifest }
     Write-Json (Join-Path $profile 'Preferences') @{ extensions = @{ settings = $stale } }
     $unpacked = Join-Path $testRoot ('unpacked-' + [char]0x4E2D)
@@ -52,7 +61,7 @@ try {
         Assert ($nativeManifest.allowed_origins -contains "chrome-extension://$id/") "Missing extension $id"
     }
     Assert ((Get-FileHash $exe).Hash -eq (Get-FileHash $nativeManifest.path).Hash) 'Installed executable differs'
-    # Repair a running native host without killing any browser.
+    Write-Host 'Starting the installed native host for live repair'
     $start = New-Object System.Diagnostics.ProcessStartInfo
     $start.FileName = $nativeManifest.path
     $start.Arguments = '--host-test'
@@ -61,7 +70,9 @@ try {
     $start.RedirectStandardOutput = $true
     $hostProcess = [System.Diagnostics.Process]::Start($start)
     $header = New-Object byte[] 4
-    Assert ($hostProcess.StandardOutput.BaseStream.Read($header, 0, 4) -eq 4) 'Host did not start'
+    $read = $hostProcess.StandardOutput.BaseStream.ReadAsync($header, 0, 4)
+    Assert ($read.Wait(5000)) 'Host did not send ready within five seconds'
+    Assert ($read.Result -eq 4) 'Host did not start'
     Run-Installer '--setup-silent' 0
     Assert ($hostProcess.WaitForExit(5000)) 'Repair did not stop the old host'
     Assert ($hostProcess.ExitCode -eq 0) 'Old host did not exit cleanly'
