@@ -1,4 +1,5 @@
 #include "setup.h"
+#include "tray.h"
 #include <windows.h>
 #include <commctrl.h>
 #include <shellapi.h>
@@ -349,6 +350,10 @@ void Show(bool silent, const std::wstring& text, UINT icon = MB_ICONINFORMATION)
 }
 } // namespace
 
+bool StopHostsForCompanion(const std::filesystem::path& installed) {
+  return StopHosts(installed);
+}
+
 int RunSetup(bool silent, bool uninstall) {
   silent |= uninstall;
   const fs::path local = Environment(L"LOCALAPPDATA");
@@ -373,8 +378,12 @@ int RunSetup(bool silent, bool uninstall) {
     uninstall = selected == 101;
   }
   if (uninstall) {
+    if (!StopTray(installed) || !StopHosts(installed)) {
+      Show(silent, L"辅助程序暂未退出，请关闭 PopTab 弹窗后重试。", MB_ICONERROR);
+      return 4;
+    }
+    RemoveAutoStart();
     for (const auto& browser : kBrowsers) RegDeleteKeyW(HKEY_CURRENT_USER, browser.registry);
-    if (!StopHosts(installed)) { Show(silent, L"辅助程序暂未退出，请关闭 PopTab 弹窗后重试。", MB_ICONERROR); return 4; }
     std::error_code error;
     fs::remove(manifest, error);
     if (_wcsicmp(self.c_str(), installed.c_str()) != 0) {
@@ -387,13 +396,18 @@ int RunSetup(bool silent, bool uninstall) {
   std::error_code error;
   fs::create_directories(folder, error);
   if (error) return 2;
-  // Stop the host before touching the EXE or the embedded extension files.
-  if (!StopHosts(installed) || (_wcsicmp(self.c_str(), installed.c_str()) != 0 &&
-      !CopyFileW(self.c_str(), installed.c_str(), FALSE))) {
+  // Stop the tray and native hosts before replacing the single EXE.
+  if (!StopTray(installed) || !StopHosts(installed) ||
+      (_wcsicmp(self.c_str(), installed.c_str()) != 0 &&
+       !CopyFileW(self.c_str(), installed.c_str(), FALSE))) {
     Show(silent, L"无法更新辅助程序。请关闭 PopTab 弹窗后重试；浏览器不会被强制结束。", MB_ICONERROR);
     return 4;
   }
   if (!ExtractExtension(extensionFolder)) { Show(silent, L"无法解压 PopTab 扩展。", MB_ICONERROR); return 3; }
+  if (!ConfigureAutoStart(installed) || !StartTray(installed)) {
+    Show(silent, L"无法启动托盘或配置开机启动。请检查当前用户的启动权限。", MB_ICONERROR);
+    return 6;
+  }
   const auto found = Discover(local);
   const auto ready = std::count_if(found.begin(), found.end(), [](const FoundExtension& f) { return f.native; });
   if (!ready) {
@@ -403,6 +417,6 @@ int RunSetup(bool silent, bool uninstall) {
     return found.empty() ? 7 : 8;
   }
   if (!RegisterHosts(manifest, installed, found)) { Show(silent, L"无法注册浏览器通信。", MB_ICONERROR); return 5; }
-  Show(silent, L"安装完成。\n\n刚更新扩展时，请在浏览器扩展页重新加载一次。\n打开或激活 PopTab 弹窗即可使用标题栏图钉。\n已打开的弹窗会在下一次重连时恢复，通常不超过一分钟。");
+  Show(silent, L"安装完成，托盘程序已启动。\n\n默认开机自启动，可在托盘右键菜单中关闭。\n托盘还提供打开文件位置和退出。\n\n刚更新扩展时，请在浏览器扩展页重新加载一次。\n打开或激活 PopTab 弹窗即可使用标题栏图钉。");
   return 0;
 }
