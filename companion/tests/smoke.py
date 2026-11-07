@@ -18,7 +18,7 @@ request = b"".join(
     + payload for msg in messages
 )
 result = subprocess.run(
-    [executable],
+    [executable, "--host-test"],
     input=request,
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
