@@ -17,7 +17,8 @@
     "default_title": "PopTab"
   },
   "permissions": [
-    "storage"
+    "storage",
+    "nativeMessaging"
   ],
   "background": {
     "service_worker": "background.js"
