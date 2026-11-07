@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <windowsx.h>
 #include <dwmapi.h>
 #include <gdiplus.h>
 #include <tlhelp32.h>
@@ -10,6 +11,9 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <climits>
+#include <cwchar>
+#include <iterator>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -67,6 +71,7 @@ HANDLE g_output = INVALID_HANDLE_VALUE;
 DWORD g_browserPid = 0;
 std::map<int, Entry> g_entries;
 std::map<int, Retired> g_retired;
+std::map<int, bool> g_pendingTransfers;
 std::vector<HWINEVENTHOOK> g_hooks;
 ULONG_PTR g_gdiplusToken = 0;
 
@@ -307,6 +312,7 @@ void DrawButton(Entry& entry) {
                                 nullptr, 0);
   if (dib && pixels) {
     HGDIOBJ oldBitmap = SelectObject(memory, dib);
+    {
     Gdiplus::Bitmap image(size, size, size * 4,
                           PixelFormat32bppPARGB, static_cast<BYTE*>(pixels));
     Gdiplus::Graphics graphics(&image);
@@ -343,6 +349,8 @@ void DrawButton(Entry& entry) {
       graphics.DrawPolygon(&pen, head, 6);
     }
     graphics.DrawLine(&pen, 14.0f, 15.0f, 12.4f, 22.0f);
+    graphics.Flush(Gdiplus::FlushIntentionSync);
+    }
 
     POINT destination{entry.x, entry.y};
     SIZE imageSize{size, size};
@@ -511,6 +519,11 @@ void OnSync(const std::vector<Bounds>& windows) {
     Entry& entry = it->second;
     entry.expected = expected;
     if (inserted) entry.firstSeen = GetTickCount64();
+    if (const auto carry = g_pendingTransfers.find(id);
+        carry != g_pendingTransfers.end()) {
+      entry.inheritedPin = carry->second;
+      g_pendingTransfers.erase(carry);
+    }
     if (entry.target && !IsWindow(entry.target)) {
       if (entry.button && IsWindow(entry.button)) {
         SetWindowLongPtrW(entry.button, GWLP_USERDATA, 0);
@@ -536,7 +549,10 @@ void OnTransfer(int from, int to) {
   }
   if (!pinned.has_value()) return;
   const auto dest = g_entries.find(to);
-  if (dest == g_entries.end()) return;
+  if (dest == g_entries.end()) {
+    g_pendingTransfers[to] = *pinned;
+    return;
+  }
   if (dest->second.target) SetPinned(dest->second, *pinned);
   else dest->second.inheritedPin = *pinned;
 }
