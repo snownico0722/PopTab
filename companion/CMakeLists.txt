@@ -20,7 +20,7 @@ add_executable(PopTabCompanion WIN32 main.cpp setup.cpp tray.cpp "${CMAKE_CURREN
 target_compile_features(PopTabCompanion PRIVATE cxx_std_17)
 target_compile_definitions(PopTabCompanion PRIVATE
   UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
-target_link_libraries(PopTabCompanion PRIVATE user32 gdi32 gdiplus dwmapi shell32 advapi32 comctl32)
+target_link_libraries(PopTabCompanion PRIVATE user32 gdi32 gdiplus dwmapi shell32 advapi32 comctl32 ole32)
 if(MSVC)
   target_compile_options(PopTabCompanion PRIVATE /W4 /EHsc /utf-8)
   # A portable EXE must not depend on a separately installed VC++ runtime.
