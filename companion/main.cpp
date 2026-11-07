@@ -251,20 +251,36 @@ BOOL CALLBACK CollectMatches(HWND window, LPARAM parameter) {
   RECT full{};
   GetWindowRect(window, &full);
   const UINT dpi = GetDpiForWindow(window);
+  const double scale = static_cast<double>(dpi) / 96.0;
   const int tolerance = std::max(22, static_cast<int>(dpi * 22 / 96));
   int best = INT_MAX;
   for (const RECT& bounds : {visible, full}) {
-    const int differences[] = {
+    // Chromium may expose window bounds in screen DIPs whereas Win32
+    // reports physical pixels. Compare both raw and DPI-scaled variants.
+    const int deltaLeft = std::min(
         std::abs(bounds.left - context.expected.left),
+        std::abs(bounds.left - static_cast<int>(std::lround(
+                                    context.expected.left * scale))));
+    const int deltaTop = std::min(
         std::abs(bounds.top - context.expected.top),
-        std::abs((bounds.right - bounds.left) - context.expected.width),
-        std::abs((bounds.bottom - bounds.top) - context.expected.height)};
-    if (*std::max_element(std::begin(differences), std::end(differences)) >
-        tolerance) {
-      continue;
+        std::abs(bounds.top - static_cast<int>(std::lround(
+                                   context.expected.top * scale))));
+    for (const double factor : {1.0, scale}) {
+      const int deltaWidth = std::abs(
+          (bounds.right - bounds.left) -
+          static_cast<int>(std::lround(context.expected.width * factor)));
+      const int deltaHeight = std::abs(
+          (bounds.bottom - bounds.top) -
+          static_cast<int>(std::lround(context.expected.height * factor)));
+      const int differences[] = {
+          deltaLeft, deltaTop, deltaWidth, deltaHeight};
+      if (*std::max_element(std::begin(differences),
+                            std::end(differences)) > tolerance) {
+        continue;
+      }
+      best = std::min(best, deltaLeft + deltaTop +
+                                deltaWidth + deltaHeight);
     }
-    best = std::min(best, differences[0] + differences[1] +
-                              differences[2] + differences[3]);
   }
   if (best != INT_MAX) context.matches.push_back({window, best});
   return TRUE;
