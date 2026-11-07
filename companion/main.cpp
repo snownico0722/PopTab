@@ -1,6 +1,7 @@
 // PopTab Companion: optional Windows-only native messaging host.
 // No browser injection, no polling of webpage content, no third-party UI framework.
 #include <windows.h>
+#include "setup.h"
 #include <objidl.h>
 #include <windowsx.h>
 #include <dwmapi.h>
@@ -651,7 +652,17 @@ void ReadCommands(HWND receiver) {
 }
 }  // namespace
 
-int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
+  const std::wstring_view arguments = commandLine ? commandLine : L"";
+  // Chromium's Native Messaging protocol always passes the extension origin
+  // as its first argument; a double-click has no such argument.
+  const bool nativeHost =
+      arguments.rfind(L"chrome-extension://", 0) == 0 ||
+      arguments.rfind(L"\"chrome-extension://", 0) == 0 ||
+      arguments.rfind(L"--host-test", 0) == 0;
+  if (!nativeHost) {
+    return RunSetup(arguments.rfind(L"--setup-silent", 0) == 0);
+  }
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   g_input = GetStdHandle(STD_INPUT_HANDLE);
   g_output = GetStdHandle(STD_OUTPUT_HANDLE);
