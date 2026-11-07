@@ -26,20 +26,11 @@ jobs:
         run: python companion/tests/smoke.py companion/build/Release/PopTabCompanion.exe
       - name: Test native titlebar button and topmost toggling
         run: python companion/tests/window_pin.py companion/build/Release/PopTabCompanion.exe
-      - name: Package portable companion and extension
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path companion/dist | Out-Null
-          Copy-Item companion/build/Release/PopTabCompanion.exe companion/dist/
-          Copy-Item companion/install.ps1,companion/uninstall.ps1,companion/Setup.cmd,companion/Uninstall.cmd,companion/README.md companion/dist/
-          New-Item -ItemType Directory -Force -Path companion/dist/PopTab-extension | Out-Null
-          Copy-Item manifest.json,background.js,native-companion.js,video-float.js companion/dist/PopTab-extension/
-          Copy-Item assets companion/dist/PopTab-extension/assets -Recurse
-      - name: Check automatic discovery, native host registration and uninstall
+      - name: Test one-file EXE auto-installation and extension extraction
         shell: powershell
         run: .\companion\tests\setup.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: PopTabCompanion-Win64
-          path: companion/dist/
+          name: PopTabCompanion-OneFile-Win64
+          path: companion/build/Release/PopTabCompanion.exe
           if-no-files-found: error
