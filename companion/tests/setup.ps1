@@ -42,10 +42,12 @@ try {
     $edgeId = 'ponmlkjihgfedcbaponmlkjihgfedcba'
     $disabledId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     $decoyId = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    $legacyId = 'cccccccccccccccccccccccccccccccc'
     $secure = @{}
     $secure[$chromeId] = @{ state = 1; manifest = $manifest }
     $secure[$disabledId] = @{ state = 0; manifest = @{ name = 'PopTab'; commands = @{ 'toggle-clean-window' = @{} } } }
     $secure[$decoyId] = @{ state = 1; manifest = @{ name = 'Other extension' } }
+    $secure[$legacyId] = @{ state = 1; manifest = @{ name = 'PopTab'; permissions = @('storage', 'nativeMessaging'); commands = @{ 'toggle-clean-window' = @{} } } }
     $profile = Join-Path $testRoot 'Google\Chrome\User Data\Default'
     Write-Json (Join-Path $profile 'Secure Preferences') @{ extensions = @{ settings = $secure } }
     $stale = @{}; $stale[$disabledId] = @{ state = 1; manifest = $manifest }

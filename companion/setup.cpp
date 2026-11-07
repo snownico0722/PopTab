@@ -232,7 +232,7 @@ void ScanProfile(std::string_view json, const fs::path& profile, size_t browser,
     Span name, commands, command, permissions;
     if (!hasManifest || !Field(source, manifest, "name", name) || StringValue(source, name) != "PopTab" ||
         !Field(source, manifest, "commands", commands) || !Field(source, commands, "toggle-clean-window", command)) return;
-    bool native = false;
+    bool native = false, alarms = false;
     if (Field(source, manifest, "permissions", permissions)) {
       size_t pos = permissions.start;
       if (pos < source.size() && source[pos++] == '[') while (pos < permissions.end) {
@@ -241,10 +241,12 @@ void ScanProfile(std::string_view json, const fs::path& profile, size_t browser,
         std::string permission;
         if (!ParseString(source, pos, permission)) break;
         native |= permission == "nativeMessaging";
+        alarms |= permission == "alarms";
         Spaces(source, pos);
         if (pos < permissions.end && source[pos] == ',') ++pos; else break;
       }
     }
+    native = native && alarms; // The current bridge needs both permissions.
     auto existing = std::find_if(results.begin(), results.end(), [&](const FoundExtension& f) {
       return f.browser == browser && f.id == id;
     });

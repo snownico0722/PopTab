@@ -134,7 +134,9 @@ with tempfile.TemporaryDirectory(prefix='PopTab-browser-') as temporary:
                 await chrome.windows.update(a.id,{focused:true});
                 await switchCleanTab(1, await chrome.tabs.get(a.tabId));
             }''', a)
-            next_hwnd = wait_for(lambda: next((h for h in buttons() if h != b_hwnd), None), 'Handoff button missing')
+            next_hwnd = wait_for(lambda: target('PopTab native test NEXT'), 'Next popup missing')
+            wait_for(lambda: buttons().get(next_hwnd), 'Handoff button missing')
+            assert a_hwnd not in buttons(), 'Old popup button survived handoff'
             wait_for(lambda: pinned(next_hwnd), 'Handoff lost topmost state')
             next_button = buttons()[next_hwnd][0]
             u.ShowWindow(next_hwnd, 6)
@@ -152,7 +154,10 @@ with tempfile.TemporaryDirectory(prefix='PopTab-browser-') as temporary:
             context.close(); context = None
     finally:
         if context is not None:
-            context.close()
+            try:
+                context.close()
+            except Exception:
+                pass  # Playwright may already be stopped; preserve the original test failure.
         os.environ['LOCALAPPDATA'] = old_local
         try: winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key_path)
         except FileNotFoundError: pass
