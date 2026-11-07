@@ -16,12 +16,27 @@ jobs:
           node --check background.js
           node --check native-companion.js
           Get-Content manifest.json -Raw | ConvertFrom-Json | Out-Null
+      - name: Check Native Messaging bridge behavior
+        run: node --test companion/tests/bridge.test.cjs
       - name: Configure C++
         run: cmake -S companion -B companion/build -A x64
       - name: Build C++
         run: cmake --build companion/build --config Release
       - name: Native messaging framing smoke test
         run: python companion/tests/smoke.py companion/build/Release/PopTabCompanion.exe
+      - name: Check per-user native messaging registration
+        shell: pwsh
+        run: |
+          & .\companion\install.ps1 -ExtensionId abcdefghijklmnopabcdefghijklmnop -Browser Chrome
+          $config = Get-Content "$env:LOCALAPPDATA\PopTabCompanion\native-host.json" -Raw | ConvertFrom-Json
+          if ($config.name -ne 'com.poptab.titlepin') { throw 'Bad host name' }
+          if ($config.allowed_origins -notcontains 'chrome-extension://abcdefghijklmnopabcdefghijklmnop/') {
+            throw 'Allowed origin is wrong'
+          }
+          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Google\Chrome\NativeMessagingHosts\com.poptab.titlepin')
+          if ($null -eq $key) { throw 'Registry entry was not created' }
+          $key.Close()
+          & .\companion\uninstall.ps1 -Browser All
       - uses: actions/upload-artifact@v4
         with:
           name: PopTabCompanion-Win64
