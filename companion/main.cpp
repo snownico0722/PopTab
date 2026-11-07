@@ -70,7 +70,7 @@ HANDLE g_output = INVALID_HANDLE_VALUE;
 DWORD g_browserPid = 0;
 std::map<int, Entry> g_entries;
 std::map<int, Retired> g_retired;
-std::map<int, bool> g_pendingTransfers;
+std::map<int, Retired> g_pendingTransfers;
 std::vector<HWINEVENTHOOK> g_hooks;
 ULONG_PTR g_gdiplusToken = 0;
 
@@ -536,7 +536,9 @@ void OnSync(const std::vector<Bounds>& windows) {
     if (inserted) entry.firstSeen = GetTickCount64();
     if (const auto carry = g_pendingTransfers.find(id);
         carry != g_pendingTransfers.end()) {
-      entry.inheritedPin = carry->second;
+      if (carry->second.expires > GetTickCount64()) {
+        entry.inheritedPin = carry->second.pinned;
+      }
       g_pendingTransfers.erase(carry);
     }
     if (entry.target && !IsWindow(entry.target)) {
@@ -565,7 +567,7 @@ void OnTransfer(int from, int to) {
   if (!pinned.has_value()) return;
   const auto dest = g_entries.find(to);
   if (dest == g_entries.end()) {
-    g_pendingTransfers[to] = *pinned;
+    g_pendingTransfers[to] = {*pinned, GetTickCount64() + kRetireMs};
     return;
   }
   if (dest->second.target) SetPinned(dest->second, *pinned);
@@ -610,6 +612,11 @@ LRESULT CALLBACK DispatcherProc(HWND window, UINT message, WPARAM wp, LPARAM lp)
       for (auto it = g_retired.begin(); it != g_retired.end();) {
         if (it->second.expires < GetTickCount64()) it = g_retired.erase(it);
         else ++it;
+      }
+      for (auto it = g_pendingTransfers.begin(); it != g_pendingTransfers.end();) {
+        if (it->second.expires < GetTickCount64()) {
+          it = g_pendingTransfers.erase(it);
+        } else ++it;
       }
       return 0;
     }
