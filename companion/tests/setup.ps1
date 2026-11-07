@@ -55,6 +55,8 @@ function Write-Json([string]$path, $value) {
 }
 try {
     Run-Installer '--setup-silent' 7
+    Assert ((Tray-Window) -eq [IntPtr]::Zero) 'Incomplete setup must not start tray'
+    Assert ((Startup-Entry) -eq $null) 'Incomplete setup must not register auto-start'
     $folder = Join-Path $testRoot 'PopTabCompanion'
     $extension = Join-Path $folder 'PopTab-extension'
     $manifest = Get-Content (Join-Path $extension 'manifest.json') -Raw | ConvertFrom-Json
@@ -118,6 +120,11 @@ try {
     }
     Assert ((Tray-Window) -eq [IntPtr]::Zero) 'Tray Exit did not stop the service'
     Assert ((Startup-Entry) -match '\-\-tray') 'Tray Exit changed auto-start unexpectedly'
+    # Launching the installed EXE in tray mode must work without reinstalling.
+    Start-Process -FilePath $nativeManifest.path -ArgumentList '--tray' | Out-Null
+    $tray = Wait-Tray
+    Assert ($tray -ne [IntPtr]::Zero) 'Failed to reopen tray after Exit'
+    Assert ((Startup-Entry) -match '\-\-tray') 'Restarting tray changed auto-start unexpectedly'
     Run-Installer '--uninstall-silent' 0
     Assert ((Startup-Entry) -eq $null) 'Uninstall did not remove auto-start'
     Assert (-not (Test-Path (Join-Path $folder 'native-host.json'))) 'Manifest remains'
