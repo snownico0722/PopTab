@@ -16,7 +16,7 @@ set(RESOURCES
 )
 string(JOIN "" PAYLOAD_RC ${RESOURCES})
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/extension_payload.rc" CONTENT "${PAYLOAD_RC}")
-add_executable(PopTabCompanion WIN32 main.cpp setup.cpp "${CMAKE_CURRENT_BINARY_DIR}/extension_payload.rc")
+add_executable(PopTabCompanion WIN32 main.cpp setup.cpp tray.cpp "${CMAKE_CURRENT_BINARY_DIR}/extension_payload.rc")
 target_compile_features(PopTabCompanion PRIVATE cxx_std_17)
 target_compile_definitions(PopTabCompanion PRIVATE
   UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
