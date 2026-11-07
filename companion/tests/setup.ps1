@@ -121,8 +121,17 @@ try {
     Assert ((Tray-Window) -eq [IntPtr]::Zero) 'Tray Exit did not stop the service'
     Assert ((Startup-Entry) -match '\-\-tray') 'Tray Exit changed auto-start unexpectedly'
     # Launching the installed EXE in tray mode must work without reinstalling.
-    Start-Process -FilePath $nativeManifest.path -ArgumentList '--tray' | Out-Null
-    $tray = Wait-Tray
+    $trayProcess = Start-Process -FilePath $nativeManifest.path -ArgumentList '--tray' -PassThru
+    try {
+        $tray = Wait-Tray
+    } catch {
+        $trayProcess.Refresh()
+        $exit = if ($trayProcess.HasExited) { $trayProcess.ExitCode } else { '<still running>' }
+        $remaining = @(Get-Process PopTabCompanion -ErrorAction SilentlyContinue |
+            Select-Object Id, HasExited, Path | ConvertTo-Json -Compress)
+        Write-Host "Tray start failed: new PID=$($trayProcess.Id), exit=$exit, processes=$remaining"
+        throw
+    }
     Assert ($tray -ne [IntPtr]::Zero) 'Failed to reopen tray after Exit'
     Assert ((Startup-Entry) -match '\-\-tray') 'Restarting tray changed auto-start unexpectedly'
     Run-Installer '--uninstall-silent' 0
