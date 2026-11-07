@@ -1,6 +1,7 @@
 // Win32 titlebar pin. The extension confirms the browser window ID;
 // this host confirms that the foreground HWND did not change meanwhile.
 #include <windows.h>
+#include <shellapi.h>
 #include <objidl.h>
 #include <windowsx.h>
 #include <dwmapi.h>
@@ -430,12 +431,18 @@ void ReadCommands(HWND receiver) {
 }
 } // namespace
 
-int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
-  const std::wstring_view args = commandLine ? commandLine : L"";
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
+  // The CRT-supplied raw string can differ between ShellExecute and
+  // CreateProcess (including leading spaces or quotes). Parse argv once.
+  int argc = 0;
+  LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+  if (!argv) return 1;
+  const std::wstring arg = argc > 1 ? argv[1] : L"";
+  LocalFree(argv);
+  const std::wstring_view args = arg;
   if (args == L"--tray") return RunTray(instance);
   const bool testHost = args == L"--host-test";
-  const bool nativeHost = testHost || args.rfind(L"chrome-extension://", 0) == 0 ||
-                         args.rfind(L"\"chrome-extension://", 0) == 0;
+  const bool nativeHost = testHost || args.rfind(L"chrome-extension://", 0) == 0;
   if (!nativeHost) return RunSetup(args == L"--setup-silent", args == L"--uninstall-silent");
   // "退出" from the tray also stops the actual pin service, without a
   // watchdog recreating it. It resumes at the next logon or manual tray start.
