@@ -77,6 +77,12 @@ After a complete browser restart, Chromium may restore a previous clean popup wi
 
 PopTab does not attempt to guess the tab's previous source window or tab index across a full browser restart.
 
+## Optional Windows titlebar pin companion
+
+On Windows, the optional **PopTab Companion** adds a small pin button to the popup's **native titlebar** (next to the window icon, not inside the webpage). Click to keep that specific popup on top; click again to unpin. The pin follows window movement, and the native host communicates with this extension using Chromium Native Messaging. No browser injection is required.
+
+The original extension works normally without the companion. Build/install instructions and limitations: [Windows Companion](companion/README.md).
+
 ## Install from source
 
 Until packaged releases and browser-store installation are available, PopTab can be loaded directly from the repository.

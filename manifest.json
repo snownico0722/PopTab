@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PopTab",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pop any browser tab into a clean, resizable window, with a hover action for large videos.",
   "icons": {
     "16": "assets/icons/icon-16.png",
@@ -17,7 +17,9 @@
     "default_title": "PopTab"
   },
   "permissions": [
-    "storage"
+    "storage",
+    "nativeMessaging",
+    "alarms"
   ],
   "background": {
     "service_worker": "background.js"
