@@ -1,5 +1,7 @@
 console.log("PopTab service worker started.");
 
+importScripts("native-companion.js");
+
 const TOGGLE_COMMAND = "toggle-clean-window";
 const NEXT_CLEAN_TAB_COMMAND = "next-clean-tab";
 const PREVIOUS_CLEAN_TAB_COMMAND = "previous-clean-tab";
@@ -913,10 +915,14 @@ async function switchCleanTab(
   }
 
   try {
-    await enterCleanMode(
+    const newPopup = await enterCleanMode(
       targetTab,
       sessions,
       cleanGeometry
+    );
+    self.popTabNativeCompanion?.transfer(
+      session.popupWindowId,
+      newPopup.id
     );
   } catch (error) {
     /*
@@ -935,10 +941,14 @@ async function switchCleanTab(
       destinationWindowId
     ) {
       try {
-        await enterCleanMode(
+        const rollbackPopup = await enterCleanMode(
           returnedTab,
           sessions,
           cleanGeometry
+        );
+        self.popTabNativeCompanion?.transfer(
+          session.popupWindowId,
+          rollbackPopup.id
         );
       } catch (rollbackError) {
         console.error(
