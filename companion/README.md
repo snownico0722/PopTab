@@ -6,48 +6,41 @@
 
 - Windows 10/11，x64。
 - Chrome、Edge 或 Brave；已安装同一仓库版本的 PopTab 扩展。
-- **最简单：**下载 GitHub Actions 的 `PopTabCompanion-Win64` 构建产物，解压后即可运行 `install.ps1`，无需自行编译。
+- **最简单：**下载 GitHub Actions 的 `PopTabCompanion-Win64` 构建产物，解压后双击 `Setup.cmd`，无需编译或手动填写扩展 ID。
 - 如果自行编译：使用 Windows CMake + Visual Studio 2022 C++ 桌面工具。
 - 不需要管理员权限，不需要安装 .NET、WPF 或 WinUI。
 
-## 直接使用构建包（推荐）
+## 自动安装（推荐）
 
-1. 打开 [Windows 构建记录](https://github.com/snownico0722/PopTab/actions/workflows/companion-windows.yml)，下载最新成功构建的 `PopTabCompanion-Win64` 压缩包并解压。
-2. 打开对应浏览器的扩展管理页，复制 PopTab 的扩展 ID。
-3. 在解压目录中执行：
-   
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File .\install.ps1 -ExtensionId 你的32位扩展ID -Browser Chrome
-   ```
-4. 重新加载 PopTab 扩展，新开的 PopTab 弹窗就会显示原生标题栏图钉。
+1. 下载 [PopTab Windows Companion 最新成功构建包](https://github.com/snownico0722/PopTab/actions/workflows/companion-windows.yml)，解压。
+2. 已经装好 **PR #5 的新版 PopTab 扩展**：直接**双击 `Setup.cmd`** 即可。不需要复制扩展 ID、不需要选择浏览器、不需要管理员权限。
+3. 如果浏览器里还是旧版 PopTab，先在扩展管理页面打开“开发者模式”，选择“加载已解压的扩展程序”，指定安装包里的 `PopTab-extension` 文件夹。为避免同时运行两个版本，可手动停用旧版扩展；然后双击 `Setup.cmd`。
+4. 安装程序会自动查找 Chrome、Edge、Brave 的本机配置文件，识别 PopTab 的扩展 ID，复制原生 EXE 并注册通信。安装后如刚更新扩展，请在扩展管理页重新加载一次 PopTab，打开新弹窗即可使用左上角图钉。
 
-下方编译和安装方式适合直接从仓库源代码运行。
+**为什么有一步不能全自动？** Chromium 不允许普通桌面程序静默安装或授权一个新的浏览器扩展。这一步必须由用户在浏览器里完成；其余本机配置可以自动完成。
 
-## 编译
+若找不到 PopTab，安装程序会提示并停止，**不会擅自安装其他扩展或把普通弹窗当成 PopTab**。扫描范围是标准位置的 Chrome、Edge、Brave 用户配置文件；便携版浏览器或自定义 User Data 路径可能需要手动指定扩展 ID。
 
-在仓库根目录打开 PowerShell：
+## 从源码编译（可选）
+
+在仓库根目录运行：
 
 ```powershell
 cmake -S companion -B companion/build -A x64
 cmake --build companion/build --config Release
 ```
 
-输出文件：`companion/build/Release/PopTabCompanion.exe`。
+输出位于 `companion/build/Release/PopTabCompanion.exe`，然后直接运行：
 
-## 安装通信（第一次配置）
+```powershell
+powershell -ExecutionPolicy Bypass -File .\companion\install.ps1
+```
 
-1. 在浏览器的 `chrome://extensions` 或 `edge://extensions` 打开开发者模式，记下 **PopTab 扩展 ID**（32 位 a–p 字母）。每次更改解压扩展的安装目录或换浏览器，都可能改变 ID。
-2. 在仓库根目录运行（将示例 ID 替换成自己的）：
+如使用特殊目录导致自动发现失败，仍可用手动兼容命令：
 
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File .\companion\install.ps1 -ExtensionId abcdefghijklmnopabcdefghijklmnop -Browser Chrome
-   ```
-
-   也可指定 `-Browser Edge`、`-Browser Brave` 或 `-Browser All`。
-3. 安装脚本把 EXE 复制至 `%LOCALAPPDATA%\PopTabCompanion`，生成包含允许扩展 ID 的 Native Messaging 清单，并写入当前用户 HKCU 注册表。它不会修改浏览器程序。
-4. **重新加载 PopTab 扩展**，打开一个新的 PopTab 无工具栏弹窗。浏览器在需要时自动启动 Companion（无需手动双击 EXE）。
-
-同一台电脑安装到多个浏览器时，可以重复运行脚本，清单会保留此前的扩展 ID。
+```powershell
+powershell -ExecutionPolicy Bypass -File .\companion\install.ps1 -ExtensionId 你的32位扩展ID -Browser Chrome
+```
 
 ## 操作和状态
 
@@ -68,7 +61,7 @@ Win32 使用 `SetWindowPos(HWND_TOPMOST / HWND_NOTOPMOST)`；按钮由 GDI+ 绘�
 
 ## 卸载
 
-关闭已打开的浏览器，然后执行：
+关闭浏览器后双击解压包中的 **`Uninstall.cmd`**。从源码运行时也可执行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\companion\uninstall.ps1 -Browser All
