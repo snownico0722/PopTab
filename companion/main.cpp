@@ -1,77 +1,51 @@
-// PopTab Companion: optional Windows-only native messaging host.
-// No browser injection, no polling of webpage content, no third-party UI framework.
+// Win32 titlebar pin. The extension confirms the browser window ID;
+// this host confirms that the foreground HWND did not change meanwhile.
 #include <windows.h>
-#include "setup.h"
 #include <objidl.h>
 #include <windowsx.h>
 #include <dwmapi.h>
 #include <gdiplus.h>
 #include <tlhelp32.h>
-
+#include "setup.h"
 #include <algorithm>
 #include <charconv>
-#include <cmath>
-#include <climits>
-#include <cwchar>
-#include <iterator>
 #include <cstdint>
+#include <cwchar>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 namespace {
 constexpr wchar_t kDispatcherClass[] = L"PopTabPinDispatcher";
 constexpr wchar_t kButtonClass[] = L"PopTabPinButton";
+constexpr wchar_t kOwnerProperty[] = L"PopTab.TitlePin.Owner";
 constexpr UINT kCommandMessage = WM_APP + 1;
 constexpr UINT kShutdownMessage = WM_APP + 2;
-constexpr UINT_PTR kTimerId = 1;
 constexpr size_t kMaxMessageBytes = 65536;
-constexpr size_t kMaxTrackedWindows = 64;
 constexpr ULONGLONG kRetireMs = 15000;
-
-struct Bounds {
-  int id = 0;
-  int left = 0;
-  int top = 0;
-  int width = 0;
-  int height = 0;
-};
-
 struct Command {
-  enum class Kind { Sync, Transfer } kind;
-  std::vector<Bounds> windows;
-  int from = 0;
-  int to = 0;
+  std::string type;
+  std::vector<int> windows;
+  int from = 0, to = 0, request = 0, id = 0;
 };
-
 struct Entry {
-  Bounds expected;
-  HWND target = nullptr;
-  HWND button = nullptr;
-  int buttonSize = 0;
-  int x = 0;
-  int y = 0;
-  bool pinned = false;
-  bool hovered = false;
+  int id = 0;
+  HWND target = nullptr, button = nullptr;
+  int size = 0, x = 0, y = 0;
+  bool pinned = false, hovered = false, originalPin = false, changedPin = false;
   std::optional<bool> inheritedPin;
-  ULONGLONG firstSeen = 0;
 };
-
-struct Retired {
-  bool pinned = false;
-  ULONGLONG expires = 0;
-};
-
-HWND g_dispatcher = nullptr;
-HANDLE g_input = INVALID_HANDLE_VALUE;
-HANDLE g_output = INVALID_HANDLE_VALUE;
+struct Retired { bool pinned; ULONGLONG expires; };
+HWND g_dispatcher = nullptr, g_focusWindow = nullptr;
+HANDLE g_input = INVALID_HANDLE_VALUE, g_output = INVALID_HANDLE_VALUE;
 DWORD g_browserPid = 0;
+int g_focusRequest = 0;
 std::map<int, Entry> g_entries;
-std::map<int, Retired> g_retired;
-std::map<int, Retired> g_pendingTransfers;
+std::map<int, Retired> g_retired, g_pendingTransfers;
 std::vector<HWINEVENTHOOK> g_hooks;
 ULONG_PTR g_gdiplusToken = 0;
 
@@ -85,375 +59,224 @@ bool ReadAll(void* buffer, DWORD bytes) {
   }
   return true;
 }
-
 bool WriteAll(const void* buffer, DWORD bytes) {
   auto* src = static_cast<const BYTE*>(buffer);
   while (bytes) {
     DWORD written = 0;
-    if (!WriteFile(g_output, src, bytes, &written, nullptr) || !written) {
-      return false;
-    }
+    if (!WriteFile(g_output, src, bytes, &written, nullptr) || !written) return false;
     src += written;
     bytes -= written;
   }
   return true;
 }
-
 void Send(const std::string& json) {
-  if (json.size() > kMaxMessageBytes) return;
   const uint32_t size = static_cast<uint32_t>(json.size());
-  const BYTE prefix[4] = {
-      static_cast<BYTE>(size), static_cast<BYTE>(size >> 8),
-      static_cast<BYTE>(size >> 16), static_cast<BYTE>(size >> 24)};
-  WriteAll(prefix, 4);
-  WriteAll(json.data(), size);
+  const BYTE prefix[4] = {static_cast<BYTE>(size), static_cast<BYTE>(size >> 8),
+                         static_cast<BYTE>(size >> 16), static_cast<BYTE>(size >> 24)};
+  if (!WriteAll(prefix, 4) || !WriteAll(json.data(), size))
+    PostMessageW(g_dispatcher, kShutdownMessage, 0, 0);
 }
-
-void SendState(const Entry& entry) {
-  Send("{\"type\":\"state\",\"id\":" + std::to_string(entry.expected.id) +
-       ",\"pinned\":" + (entry.pinned ? "true}" : "false}"));
-}
-
-// The extension sends only numeric fields and an ASCII command. Parse those
-// exact values without admitting native window handles supplied by a page.
-std::optional<std::string> StringField(
-    const std::string& text, const char* name, size_t begin, size_t end) {
-  const std::string key = std::string("\"") + name + "\"";
-  size_t pos = text.find(key, begin);
-  if (pos == std::string::npos || pos + key.size() >= end) return {};
-  pos += key.size();
+// Messages are emitted only by our extension, with ASCII keys and integer IDs.
+std::optional<int> IntField(const std::string& text, const char* key,
+                            size_t begin = 0, size_t end = std::string::npos) {
+  end = std::min(end, text.size());
+  size_t pos = text.find(std::string("\"") + key + "\"", begin);
+  if (pos == std::string::npos || pos >= end) return {};
+  pos = text.find(':', pos);
+  if (pos == std::string::npos || ++pos >= end) return {};
   while (pos < end && (text[pos] == ' ' || text[pos] == '\t')) ++pos;
-  if (pos >= end || text[pos++] != ':') return {};
-  while (pos < end && (text[pos] == ' ' || text[pos] == '\t')) ++pos;
-  if (pos >= end || text[pos++] != '"') return {};
-  const size_t finish = text.find('"', pos);
-  if (finish == std::string::npos || finish >= end) return {};
-  return text.substr(pos, finish - pos);
-}
-
-std::optional<int> IntField(
-    const std::string& text, const char* name, size_t begin, size_t end) {
-  const std::string key = std::string("\"") + name + "\"";
-  size_t pos = text.find(key, begin);
-  if (pos == std::string::npos || pos + key.size() >= end) return {};
-  pos += key.size();
-  while (pos < end && (text[pos] == ' ' || text[pos] == '\t')) ++pos;
-  if (pos >= end || text[pos++] != ':') return {};
-  while (pos < end && (text[pos] == ' ' || text[pos] == '\t')) ++pos;
-  const char* start = text.data() + pos;
   int value = 0;
-  const auto parsed = std::from_chars(start, text.data() + end, value);
-  if (parsed.ec != std::errc{} || parsed.ptr == start) return {};
+  auto parsed = std::from_chars(text.data() + pos, text.data() + end, value);
+  if (parsed.ec != std::errc{}) return {};
   return value;
 }
-
 std::unique_ptr<Command> Parse(const std::string& json) {
-  const auto type = StringField(json, "type", 0, json.size());
-  if (!type) return {};
+  size_t pos = json.find("\"type\"");
+  if (pos == std::string::npos) return {};
+  pos = json.find(':', pos);
+  if (pos == std::string::npos) return {};
+  pos = json.find('"', pos);
+  if (pos == std::string::npos) return {};
+  const size_t end = json.find('"', pos + 1);
+  if (end == std::string::npos) return {};
   auto command = std::make_unique<Command>();
-
-  if (*type == "transfer") {
-    command->kind = Command::Kind::Transfer;
-    const auto from = IntField(json, "from", 0, json.size());
-    const auto to = IntField(json, "to", 0, json.size());
-    if (!from || !to || *from <= 0 || *to <= 0 || *from == *to) return {};
-    command->from = *from;
-    command->to = *to;
+  command->type = json.substr(pos + 1, end - pos - 1);
+  if (command->type == "shutdown") return command;
+  if (command->type == "focus") {
+    command->request = IntField(json, "request").value_or(0);
+    command->id = IntField(json, "id").value_or(0);
     return command;
   }
-
-  if (*type != "sync") return {};
-  command->kind = Command::Kind::Sync;
-  size_t start = json.find("\"windows\"");
-  if (start == std::string::npos) return {};
-  start = json.find('[', start + 9);
-  if (start == std::string::npos) return {};
-  size_t end = json.find(']', start + 1);
-  if (end == std::string::npos) return {};
-
-  for (size_t at = start + 1; at < end;) {
-    const size_t open = json.find('{', at);
-    if (open == std::string::npos || open >= end) break;
-    const size_t close = json.find('}', open + 1);
-    if (close == std::string::npos || close >= end) return {};
-    auto id = IntField(json, "id", open, close);
-    auto left = IntField(json, "left", open, close);
-    auto top = IntField(json, "top", open, close);
-    auto width = IntField(json, "width", open, close);
-    auto height = IntField(json, "height", open, close);
-    if (!id || !left || !top || !width || !height || *id <= 0 ||
-        *width <= 0 || *height <= 0 || *width > 32768 || *height > 32768 ||
-        std::abs(static_cast<int64_t>(*left)) > 1000000 ||
-        std::abs(static_cast<int64_t>(*top)) > 1000000 ||
-        command->windows.size() >= kMaxTrackedWindows) {
-      return {};
-    }
-    command->windows.push_back({*id, *left, *top, *width, *height});
-    at = close + 1;
+  if (command->type == "transfer") {
+    command->from = IntField(json, "from").value_or(0);
+    command->to = IntField(json, "to").value_or(0);
+    if (command->from <= 0 || command->to <= 0 || command->from == command->to) return {};
+    return command;
+  }
+  if (command->type != "sync") return {};
+  pos = json.find("\"windows\"");
+  if (pos == std::string::npos) return {};
+  const size_t finish = json.find(']', pos);
+  if (finish == std::string::npos) return {};
+  while ((pos = json.find('{', pos)) != std::string::npos && pos < finish) {
+    const size_t close = json.find('}', pos);
+    if (close == std::string::npos || close > finish) return {};
+    auto id = IntField(json, "id", pos, close);
+    if (!id || *id <= 0) return {};
+    command->windows.push_back(*id);
+    pos = close + 1;
   }
   return command;
 }
-
-DWORD ParentProcessId() {
-  const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+DWORD ParentProcessId() { // Test harness only; real Chromium can launch via cmd.exe.
+  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
   if (snapshot == INVALID_HANDLE_VALUE) return 0;
   PROCESSENTRY32W entry{};
   entry.dwSize = sizeof(entry);
   DWORD parent = 0;
-  if (Process32FirstW(snapshot, &entry)) {
-    do {
-      if (entry.th32ProcessID == GetCurrentProcessId()) {
-        parent = entry.th32ParentProcessID;
-        break;
-      }
-    } while (Process32NextW(snapshot, &entry));
-  }
+  if (Process32FirstW(snapshot, &entry)) do {
+    if (entry.th32ProcessID == GetCurrentProcessId()) {
+      parent = entry.th32ParentProcessID;
+      break;
+    }
+  } while (Process32NextW(snapshot, &entry));
   CloseHandle(snapshot);
   return parent;
 }
-
 bool IsBrowserWindow(HWND window) {
-  if (!g_browserPid || !IsWindow(window) || !IsWindowVisible(window) ||
-      IsIconic(window) || GetAncestor(window, GA_ROOT) != window) {
-    return false;
-  }
   DWORD pid = 0;
   GetWindowThreadProcessId(window, &pid);
-  if (pid != g_browserPid) return false;
-  wchar_t className[80]{};
-  return GetClassNameW(window, className, 80) &&
-         wcscmp(className, L"Chrome_WidgetWin_1") == 0;
+  wchar_t name[80]{};
+  return g_browserPid && pid == g_browserPid && GetAncestor(window, GA_ROOT) == window &&
+         GetClassNameW(window, name, 80) && wcscmp(name, L"Chrome_WidgetWin_1") == 0;
 }
-
+bool OwnsTarget(const Entry& entry) {
+  return IsBrowserWindow(entry.target) &&
+         GetPropW(entry.target, kOwnerProperty) == g_dispatcher;
+}
+bool IsPinned(HWND window) {
+  return (GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+}
 RECT VisibleBounds(HWND window) {
-  RECT bounds{};
-  if (FAILED(DwmGetWindowAttribute(
-          window, DWMWA_EXTENDED_FRAME_BOUNDS, &bounds, sizeof(bounds)))) {
-    GetWindowRect(window, &bounds);
-  }
-  return bounds;
+  RECT rect{};
+  if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &rect, sizeof(rect))))
+    GetWindowRect(window, &rect);
+  return rect;
 }
-
-struct Match {
-  HWND window = nullptr;
-  int score = 0;
-};
-
-struct MatchContext {
-  Bounds expected;
-  HWND foreground = nullptr;
-  std::vector<Match> matches;
-};
-
-BOOL CALLBACK CollectMatches(HWND window, LPARAM parameter) {
-  auto& context = *reinterpret_cast<MatchContext*>(parameter);
-  if (!IsBrowserWindow(window)) return TRUE;
-  const RECT visible = VisibleBounds(window);
-  RECT full{};
-  GetWindowRect(window, &full);
-  const UINT dpi = GetDpiForWindow(window);
-  const double scale = static_cast<double>(dpi) / 96.0;
-  const int tolerance = std::max(22, static_cast<int>(dpi * 22 / 96));
-  int best = INT_MAX;
-  for (const RECT& bounds : {visible, full}) {
-    // Chromium may expose window bounds in screen DIPs whereas Win32
-    // reports physical pixels. Compare both raw and DPI-scaled variants.
-    const int deltaLeft = std::min(
-        std::abs(bounds.left - context.expected.left),
-        std::abs(bounds.left - static_cast<int>(std::lround(
-                                    context.expected.left * scale))));
-    const int deltaTop = std::min(
-        std::abs(bounds.top - context.expected.top),
-        std::abs(bounds.top - static_cast<int>(std::lround(
-                                   context.expected.top * scale))));
-    for (const double factor : {1.0, scale}) {
-      const int deltaWidth = std::abs(
-          (bounds.right - bounds.left) -
-          static_cast<int>(std::lround(context.expected.width * factor)));
-      const int deltaHeight = std::abs(
-          (bounds.bottom - bounds.top) -
-          static_cast<int>(std::lround(context.expected.height * factor)));
-      const int differences[] = {
-          deltaLeft, deltaTop, deltaWidth, deltaHeight};
-      if (*std::max_element(std::begin(differences),
-                            std::end(differences)) > tolerance) {
-        continue;
-      }
-      best = std::min(best, deltaLeft + deltaTop +
-                                deltaWidth + deltaHeight);
-    }
-  }
-  if (best != INT_MAX) context.matches.push_back({window, best});
-  return TRUE;
+void SendState(const Entry& entry) {
+  Send("{\"type\":\"state\",\"id\":" + std::to_string(entry.id) +
+       ",\"pinned\":" + (entry.pinned ? "true}" : "false}"));
 }
-
-HWND FindTarget(const Bounds& expected) {
-  MatchContext matches{expected, GetForegroundWindow(), {}};
-  EnumWindows(CollectMatches, reinterpret_cast<LPARAM>(&matches));
-  if (matches.matches.empty()) return nullptr;
-  if (matches.matches.size() == 1) return matches.matches.front().window;
-
-  // A freshly created PopTab popup is focused. The original browser may
-  // have exactly the same bounds, so geometry alone must not pick it.
-  for (const auto& match : matches.matches) {
-    if (match.window == matches.foreground) return match.window;
-  }
-  std::sort(matches.matches.begin(), matches.matches.end(),
-            [](const Match& a, const Match& b) { return a.score < b.score; });
-  if (matches.matches[1].score - matches.matches[0].score > 20) {
-    return matches.matches[0].window;
-  }
-  return nullptr;  // ambiguous: fail closed instead of pinning another window
-}
-
 void DrawButton(Entry& entry) {
-  if (!entry.button || !IsWindow(entry.button) || entry.buttonSize <= 0) return;
-  const int size = entry.buttonSize;
+  if (!IsWindow(entry.button) || entry.size <= 0) return;
   HDC screen = GetDC(nullptr);
   if (!screen) return;
   HDC memory = CreateCompatibleDC(screen);
-  if (!memory) {
-    ReleaseDC(nullptr, screen);
-    return;
-  }
+  if (!memory) { ReleaseDC(nullptr, screen); return; }
   BITMAPINFO info{};
   info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-  info.bmiHeader.biWidth = size;
-  info.bmiHeader.biHeight = -size;
+  info.bmiHeader.biWidth = entry.size;
+  info.bmiHeader.biHeight = -entry.size;
   info.bmiHeader.biPlanes = 1;
   info.bmiHeader.biBitCount = 32;
   info.bmiHeader.biCompression = BI_RGB;
   void* pixels = nullptr;
-  HBITMAP dib = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &pixels,
-                                nullptr, 0);
+  HBITMAP dib = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
   if (dib && pixels) {
-    HGDIOBJ oldBitmap = SelectObject(memory, dib);
+    HGDIOBJ old = SelectObject(memory, dib);
     {
-    Gdiplus::Bitmap image(size, size, size * 4,
-                          PixelFormat32bppPARGB, static_cast<BYTE*>(pixels));
-    Gdiplus::Graphics graphics(&image);
-    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-    graphics.Clear(Gdiplus::Color(0, 0, 0, 0));
-    graphics.ScaleTransform(static_cast<Gdiplus::REAL>(size) / 28.0f,
-                            static_cast<Gdiplus::REAL>(size) / 28.0f);
-
-    Gdiplus::GraphicsPath background;
-    background.AddArc(0.6f, 0.6f, 6.0f, 6.0f, 180.0f, 90.0f);
-    background.AddArc(21.4f, 0.6f, 6.0f, 6.0f, 270.0f, 90.0f);
-    background.AddArc(21.4f, 21.4f, 6.0f, 6.0f, 0.0f, 90.0f);
-    background.AddArc(0.6f, 21.4f, 6.0f, 6.0f, 90.0f, 90.0f);
-    background.CloseFigure();
-    const Gdiplus::Color fill = entry.pinned
-        ? Gdiplus::Color(225, 37, 105, 197)
-        : entry.hovered ? Gdiplus::Color(195, 55, 60, 70)
-                        : Gdiplus::Color(135, 48, 52, 60);
-    Gdiplus::SolidBrush brush(fill);
-    graphics.FillPath(&brush, &background);
-
-    const Gdiplus::Color icon = entry.pinned
-        ? Gdiplus::Color(255, 255, 255, 255)
-        : Gdiplus::Color(235, 244, 246, 250);
-    Gdiplus::Pen pen(icon, 1.8f);
-    pen.SetLineJoin(Gdiplus::LineJoinRound);
-    const Gdiplus::PointF head[] = {
-        {10.0f, 7.2f}, {18.0f, 7.2f}, {17.0f, 11.5f},
-        {20.0f, 15.0f}, {8.0f, 15.0f}, {11.0f, 11.5f}};
-    if (entry.pinned) {
-      Gdiplus::SolidBrush solid(icon);
-      graphics.FillPolygon(&solid, head, 6);
-    } else {
-      graphics.DrawPolygon(&pen, head, 6);
+      Gdiplus::Bitmap image(entry.size, entry.size, entry.size * 4,
+                            PixelFormat32bppPARGB, static_cast<BYTE*>(pixels));
+      Gdiplus::Graphics graphics(&image);
+      graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+      graphics.Clear(Gdiplus::Color(0, 0, 0, 0));
+      graphics.ScaleTransform(entry.size / 28.0f, entry.size / 28.0f);
+      Gdiplus::GraphicsPath background;
+      background.AddArc(0.6f, 0.6f, 6.0f, 6.0f, 180.0f, 90.0f);
+      background.AddArc(21.4f, 0.6f, 6.0f, 6.0f, 270.0f, 90.0f);
+      background.AddArc(21.4f, 21.4f, 6.0f, 6.0f, 0.0f, 90.0f);
+      background.AddArc(0.6f, 21.4f, 6.0f, 6.0f, 90.0f, 90.0f);
+      background.CloseFigure();
+      Gdiplus::SolidBrush brush(entry.pinned ? Gdiplus::Color(225, 37, 105, 197) :
+          entry.hovered ? Gdiplus::Color(195, 55, 60, 70) : Gdiplus::Color(135, 48, 52, 60));
+      graphics.FillPath(&brush, &background);
+      Gdiplus::Color icon(255, 244, 246, 250);
+      Gdiplus::Pen pen(icon, 1.8f);
+      pen.SetLineJoin(Gdiplus::LineJoinRound);
+      const Gdiplus::PointF head[] = {{10.0f, 7.2f}, {18.0f, 7.2f}, {17.0f, 11.5f},
+                                    {20.0f, 15.0f}, {8.0f, 15.0f}, {11.0f, 11.5f}};
+      if (entry.pinned) {
+        Gdiplus::SolidBrush solid(icon);
+        graphics.FillPolygon(&solid, head, 6);
+      } else graphics.DrawPolygon(&pen, head, 6);
+      graphics.DrawLine(&pen, 14.0f, 15.0f, 12.4f, 22.0f);
+      graphics.Flush(Gdiplus::FlushIntentionSync);
     }
-    graphics.DrawLine(&pen, 14.0f, 15.0f, 12.4f, 22.0f);
-    graphics.Flush(Gdiplus::FlushIntentionSync);
-    }
-
-    POINT destination{entry.x, entry.y};
-    SIZE imageSize{size, size};
-    POINT source{0, 0};
+    POINT dest{entry.x, entry.y}, source{};
+    SIZE size{entry.size, entry.size};
     BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-    UpdateLayeredWindow(entry.button, screen, &destination, &imageSize,
-                        memory, &source, 0, &blend, ULW_ALPHA);
-    SelectObject(memory, oldBitmap);
-    DeleteObject(dib);
-  } else if (dib) {
-    DeleteObject(dib);
+    UpdateLayeredWindow(entry.button, screen, &dest, &size, memory, &source, 0, &blend, ULW_ALPHA);
+    SelectObject(memory, old);
   }
+  if (dib) DeleteObject(dib);
   DeleteDC(memory);
   ReleaseDC(nullptr, screen);
 }
-
 void RefreshPosition(Entry& entry) {
-  if (!entry.target || !IsWindow(entry.target) ||
-      !entry.button || !IsWindow(entry.button)) return;
-  if (!IsWindowVisible(entry.target) || IsIconic(entry.target) ||
-      !(GetWindowLongPtrW(entry.target, GWL_STYLE) & WS_CAPTION)) {
+  if (!OwnsTarget(entry) || !IsWindow(entry.button)) return;
+  DWORD cloaked = 0;
+  DwmGetWindowAttribute(entry.target, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
+  if (!IsWindowVisible(entry.target) || IsIconic(entry.target) || cloaked ||
+      (GetWindowLongPtrW(entry.target, GWL_STYLE) & WS_CAPTION) != WS_CAPTION) {
     ShowWindow(entry.button, SW_HIDE);
     return;
   }
-
   const UINT dpi = GetDpiForWindow(entry.target);
-  const int size = std::max(28, MulDiv(28, dpi, 96));
-  const RECT visible = VisibleBounds(entry.target);
-  const int titleHeight = std::max(30, MulDiv(32, dpi, 96));
-  // Leave the browser/system icon and system menu untouched.
-  const int x = visible.left + MulDiv(42, dpi, 96);
-  const int y = visible.top + (titleHeight - size) / 2;
-  if (visible.right - x < size + MulDiv(80, dpi, 96)) {
+  const RECT bounds = VisibleBounds(entry.target);
+  const int size = MulDiv(28, dpi, 96);
+  const int x = bounds.left + MulDiv(42, dpi, 96);
+  const int y = bounds.top + MulDiv(2, dpi, 96);
+  if (bounds.right - x < size + MulDiv(80, dpi, 96)) {
     ShowWindow(entry.button, SW_HIDE);
     return;
   }
-
-  const bool changed = entry.x != x || entry.y != y ||
-                       entry.buttonSize != size;
-  const bool resize = entry.buttonSize != size;
-  entry.x = x;
-  entry.y = y;
-  entry.buttonSize = size;
-  if (changed) {
+  const bool redraw = entry.size != size;
+  if (entry.x != x || entry.y != y || redraw) {
+    entry.x = x; entry.y = y; entry.size = size;
     SetWindowPos(entry.button, nullptr, x, y, size, size,
                  SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
   }
-  if (resize) DrawButton(entry);
+  if (redraw) DrawButton(entry);
   if (!IsWindowVisible(entry.button)) ShowWindow(entry.button, SW_SHOWNOACTIVATE);
-
-  const bool pinned = (GetWindowLongPtrW(entry.target, GWL_EXSTYLE) &
-                       WS_EX_TOPMOST) != 0;
-  if (entry.pinned != pinned) {
-    entry.pinned = pinned;
+  if (entry.pinned != IsPinned(entry.target)) {
+    entry.pinned = IsPinned(entry.target);
+    entry.changedPin = false; // An external tool changed it; don't undo that on exit.
     DrawButton(entry);
     SendState(entry);
   }
 }
-
 void SetPinned(Entry& entry, bool pinned) {
-  if (!entry.target || !IsWindow(entry.target)) return;
-  const HWND after = pinned ? HWND_TOPMOST : HWND_NOTOPMOST;
-  if (SetWindowPos(entry.target, after, 0, 0, 0, 0,
+  if (!OwnsTarget(entry)) return;
+  if (SetWindowPos(entry.target, pinned ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)) {
-    entry.pinned = (GetWindowLongPtrW(entry.target, GWL_EXSTYLE) &
-                    WS_EX_TOPMOST) != 0;
+    entry.pinned = IsPinned(entry.target);
+    entry.changedPin = entry.pinned != entry.originalPin;
     DrawButton(entry);
     SendState(entry);
   }
 }
-
 LRESULT CALLBACK ButtonProc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
   auto* entry = reinterpret_cast<Entry*>(GetWindowLongPtrW(window, GWLP_USERDATA));
   if (message == WM_NCCREATE) {
-    auto* create = reinterpret_cast<CREATESTRUCTW*>(lp);
     SetWindowLongPtrW(window, GWLP_USERDATA,
-                      reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+      reinterpret_cast<LONG_PTR>(reinterpret_cast<CREATESTRUCTW*>(lp)->lpCreateParams));
     return TRUE;
   }
   if (!entry) return DefWindowProcW(window, message, wp, lp);
   switch (message) {
-    case WM_MOUSEACTIVATE:
-      return MA_NOACTIVATE;
-    case WM_SETCURSOR:
-      SetCursor(LoadCursorW(nullptr, IDC_HAND));
-      return TRUE;
-    case WM_MOUSEMOVE: {
+    case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+    case WM_SETCURSOR: SetCursor(LoadCursorW(nullptr, IDC_HAND)); return TRUE;
+    case WM_MOUSEMOVE:
       if (!entry->hovered) {
         entry->hovered = true;
         DrawButton(*entry);
@@ -461,219 +284,158 @@ LRESULT CALLBACK ButtonProc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
         TrackMouseEvent(&track);
       }
       return 0;
-    }
-    case WM_MOUSELEAVE:
-      entry->hovered = false;
-      DrawButton(*entry);
-      return 0;
-    case WM_LBUTTONDOWN:
-      SetCapture(window);
-      return 0;
+    case WM_MOUSELEAVE: entry->hovered = false; DrawButton(*entry); return 0;
+    case WM_LBUTTONDOWN: SetCapture(window); return 0;
     case WM_LBUTTONUP:
       if (GetCapture() == window) {
         ReleaseCapture();
         POINT point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
-        RECT buttonRect{};
-        GetClientRect(window, &buttonRect);
-        if (PtInRect(&buttonRect, point)) SetPinned(*entry, !entry->pinned);
+        RECT rect{};
+        GetClientRect(window, &rect);
+        if (PtInRect(&rect, point)) SetPinned(*entry, !IsPinned(entry->target));
       }
       return 0;
-    case WM_ERASEBKGND:
-      return 1;
+    case WM_ERASEBKGND: return 1;
   }
   return DefWindowProcW(window, message, wp, lp);
 }
-
-void Retire(int id) {
-  auto found = g_entries.find(id);
-  if (found == g_entries.end()) return;
-  Entry& entry = found->second;
-  // Preserve the old state even when Chromium destroyed the HWND first.
-  g_retired[id] = {entry.pinned, GetTickCount64() + kRetireMs};
-  if (entry.button && IsWindow(entry.button)) {
+void Release(Entry& entry) {
+  if (OwnsTarget(entry)) {
+    if (entry.changedPin && IsPinned(entry.target) == entry.pinned)
+      SetWindowPos(entry.target, entry.originalPin ? HWND_TOPMOST : HWND_NOTOPMOST,
+                   0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    RemovePropW(entry.target, kOwnerProperty);
+  }
+  if (IsWindow(entry.button)) {
     SetWindowLongPtrW(entry.button, GWLP_USERDATA, 0);
     DestroyWindow(entry.button);
   }
-  g_entries.erase(found);
+  entry.target = entry.button = nullptr;
 }
-
-void TryBind(Entry& entry) {
-  if (entry.target || GetTickCount64() - entry.firstSeen > 8000) return;
-  HWND target = FindTarget(entry.expected);
-  if (!target) return;
-  entry.target = target;
-  entry.pinned = (GetWindowLongPtrW(target, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
-  entry.button = CreateWindowExW(
-      WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-      kButtonClass, L"", WS_POPUP, 0, 0, 28, 28, target, nullptr,
+void RequestFocus() {
+  g_focusWindow = GetForegroundWindow();
+  ++g_focusRequest; // Invalidates any reply about the preceding foreground window.
+  if (!g_entries.empty() && IsBrowserWindow(g_focusWindow))
+    Send("{\"type\":\"focus\",\"request\":" + std::to_string(g_focusRequest) + "}");
+}
+void BindFocus(const Command& command) {
+  auto found = g_entries.find(command.id);
+  if (command.request != g_focusRequest || found == g_entries.end() ||
+      g_focusWindow != GetForegroundWindow() || !IsBrowserWindow(g_focusWindow) ||
+      IsIconic(g_focusWindow)) return;
+  Entry& entry = found->second;
+  if (OwnsTarget(entry)) return;
+  // Never attach two buttons to the same HWND, including another host instance.
+  HWND owner = static_cast<HWND>(GetPropW(g_focusWindow, kOwnerProperty));
+  if (IsWindow(owner)) return;
+  if (!SetPropW(g_focusWindow, kOwnerProperty, g_dispatcher)) return;
+  entry.target = g_focusWindow;
+  entry.originalPin = entry.pinned = IsPinned(entry.target);
+  entry.changedPin = false;
+  entry.button = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+      kButtonClass, L"", WS_POPUP, 0, 0, 28, 28, entry.target, nullptr,
       GetModuleHandleW(nullptr), &entry);
-  if (!entry.button) {
-    entry.target = nullptr;
-    return;
-  }
-  if (entry.inheritedPin.has_value()) {
-    SetPinned(entry, *entry.inheritedPin);
-    entry.inheritedPin.reset();
-  }
+  if (!entry.button) { Release(entry); return; }
+  if (entry.inheritedPin) SetPinned(entry, *entry.inheritedPin);
+  entry.inheritedPin.reset();
   RefreshPosition(entry);
   DrawButton(entry);
   SendState(entry);
 }
-
-void OnSync(const std::vector<Bounds>& windows) {
-  std::map<int, Bounds> incoming;
-  for (const auto& window : windows) incoming[window.id] = window;
-
-  std::vector<int> toRemove;
-  for (const auto& [id, entry] : g_entries) {
-    if (!incoming.count(id)) toRemove.push_back(id);
+void OnSync(const std::vector<int>& ids) {
+  for (auto it = g_entries.begin(); it != g_entries.end();) {
+    if (std::find(ids.begin(), ids.end(), it->first) == ids.end()) {
+      g_retired[it->first] = {it->second.pinned, GetTickCount64() + kRetireMs};
+      Release(it->second);
+      it = g_entries.erase(it);
+    } else ++it;
   }
-  for (int id : toRemove) Retire(id);
-
-  for (const auto& [id, expected] : incoming) {
-    auto [it, inserted] = g_entries.try_emplace(id);
-    Entry& entry = it->second;
-    entry.expected = expected;
-    if (inserted) entry.firstSeen = GetTickCount64();
-    if (const auto carry = g_pendingTransfers.find(id);
-        carry != g_pendingTransfers.end()) {
-      if (carry->second.expires > GetTickCount64()) {
-        entry.inheritedPin = carry->second.pinned;
-      }
+  for (int id : ids) {
+    Entry& entry = g_entries[id];
+    entry.id = id;
+    if (auto carry = g_pendingTransfers.find(id); carry != g_pendingTransfers.end()) {
+      if (carry->second.expires > GetTickCount64()) entry.inheritedPin = carry->second.pinned;
       g_pendingTransfers.erase(carry);
     }
-    if (entry.target && !IsWindow(entry.target)) {
-      if (entry.button && IsWindow(entry.button)) {
-        SetWindowLongPtrW(entry.button, GWLP_USERDATA, 0);
-        DestroyWindow(entry.button);
-      }
-      entry.button = nullptr;
-      entry.target = nullptr;
-      entry.firstSeen = GetTickCount64();
-    }
-    if (!entry.target) TryBind(entry);
-    else RefreshPosition(entry);
   }
+  RequestFocus();
 }
-
 void OnTransfer(int from, int to) {
   std::optional<bool> pinned;
-  const auto source = g_entries.find(from);
-  if (source != g_entries.end()) pinned = source->second.pinned;
-  const auto retired = g_retired.find(from);
-  if (!pinned && retired != g_retired.end() &&
-      retired->second.expires > GetTickCount64()) {
-    pinned = retired->second.pinned;
-  }
-  if (!pinned.has_value()) return;
-  const auto dest = g_entries.find(to);
-  if (dest == g_entries.end()) {
-    g_pendingTransfers[to] = {*pinned, GetTickCount64() + kRetireMs};
-    return;
-  }
-  if (dest->second.target) SetPinned(dest->second, *pinned);
+  if (auto source = g_entries.find(from); source != g_entries.end()) pinned = source->second.pinned;
+  else if (auto retired = g_retired.find(from); retired != g_retired.end() &&
+           retired->second.expires > GetTickCount64()) pinned = retired->second.pinned;
+  if (!pinned) return;
+  auto dest = g_entries.find(to);
+  if (dest == g_entries.end()) g_pendingTransfers[to] = {*pinned, GetTickCount64() + kRetireMs};
+  else if (OwnsTarget(dest->second)) SetPinned(dest->second, *pinned);
   else dest->second.inheritedPin = *pinned;
 }
-
-void CALLBACK OnWindowEvent(HWINEVENTHOOK, DWORD event, HWND window,
-                            LONG objectId, LONG, DWORD, DWORD) {
-  if (objectId != OBJID_WINDOW) return;
-  if (event == EVENT_SYSTEM_FOREGROUND) {
-    for (auto& [id, entry] : g_entries) {
-      if (!entry.target) TryBind(entry);
-    }
-    return;
-  }
-  for (auto& [id, entry] : g_entries) {
-    if (entry.target == window) {
-      RefreshPosition(entry);
-      break;
-    }
+void CALLBACK OnWindowEvent(HWINEVENTHOOK, DWORD event, HWND window, LONG object, LONG, DWORD, DWORD) {
+  if (event == EVENT_SYSTEM_FOREGROUND) { RequestFocus(); return; }
+  if (object != OBJID_WINDOW) return;
+  for (auto& [id, entry] : g_entries) if (entry.target == window) {
+    if (event == EVENT_OBJECT_DESTROY) Release(entry);
+    else RefreshPosition(entry);
+    break;
   }
 }
-
 LRESULT CALLBACK DispatcherProc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
   switch (message) {
     case kCommandMessage: {
       std::unique_ptr<Command> command(reinterpret_cast<Command*>(lp));
-      if (command->kind == Command::Kind::Sync) OnSync(command->windows);
-      else OnTransfer(command->from, command->to);
+      if (command->type == "sync") OnSync(command->windows);
+      else if (command->type == "focus") BindFocus(*command);
+      else if (command->type == "transfer") OnTransfer(command->from, command->to);
+      else if (command->type == "shutdown") DestroyWindow(window);
       return 0;
     }
-    case WM_TIMER: {
-      for (auto& [id, entry] : g_entries) {
-        if (entry.target && !IsWindow(entry.target)) {
-          entry.target = nullptr;
-          entry.button = nullptr;  // owner destroyed the owned button
-          entry.firstSeen = GetTickCount64();
-        }
-        if (!entry.target) TryBind(entry);
-        else RefreshPosition(entry);
-      }
-      for (auto it = g_retired.begin(); it != g_retired.end();) {
-        if (it->second.expires < GetTickCount64()) it = g_retired.erase(it);
-        else ++it;
-      }
-      for (auto it = g_pendingTransfers.begin(); it != g_pendingTransfers.end();) {
-        if (it->second.expires < GetTickCount64()) {
-          it = g_pendingTransfers.erase(it);
-        } else ++it;
-      }
+    case WM_TIMER:
+      for (auto& [id, entry] : g_entries) RefreshPosition(entry);
+      for (auto* cache : {&g_retired, &g_pendingTransfers})
+        for (auto it = cache->begin(); it != cache->end();)
+          if (it->second.expires < GetTickCount64()) it = cache->erase(it); else ++it;
       return 0;
-    }
-    case kShutdownMessage:
-      DestroyWindow(window);
-      return 0;
-    case WM_DESTROY:
-      PostQuitMessage(0);
-      return 0;
+    case kShutdownMessage: DestroyWindow(window); return 0;
+    case WM_DESTROY: PostQuitMessage(0); return 0;
   }
   return DefWindowProcW(window, message, wp, lp);
 }
-
 void ReadCommands(HWND receiver) {
   while (true) {
-    BYTE prefix[4]{};
-    if (!ReadAll(prefix, sizeof(prefix))) break;
-    const uint32_t length = static_cast<uint32_t>(prefix[0]) |
-        (static_cast<uint32_t>(prefix[1]) << 8) |
-        (static_cast<uint32_t>(prefix[2]) << 16) |
-        (static_cast<uint32_t>(prefix[3]) << 24);
-    if (length == 0 || length > kMaxMessageBytes) break;
-    std::string json(length, '\0');
-    if (!ReadAll(json.data(), length)) break;
+    uint32_t size = 0; // Native Messaging uses host byte order; Windows is little-endian.
+    if (!ReadAll(&size, sizeof(size)) || !size || size > kMaxMessageBytes) break;
+    std::string json(size, '\0');
+    if (!ReadAll(json.data(), size)) break;
     auto command = Parse(json);
     if (!command) continue;
+    const bool shutdown = command->type == "shutdown";
     Command* raw = command.release();
-    if (!PostMessageW(receiver, kCommandMessage, 0,
-                      reinterpret_cast<LPARAM>(raw))) delete raw;
+    if (!PostMessageW(receiver, kCommandMessage, 0, reinterpret_cast<LPARAM>(raw))) delete raw;
+    if (shutdown) return;
   }
   PostMessageW(receiver, kShutdownMessage, 0, 0);
 }
-}  // namespace
+} // namespace
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
-  const std::wstring_view arguments = commandLine ? commandLine : L"";
-  // Chromium's Native Messaging protocol always passes the extension origin
-  // as its first argument; a double-click has no such argument.
-  const bool nativeHost =
-      arguments.rfind(L"chrome-extension://", 0) == 0 ||
-      arguments.rfind(L"\"chrome-extension://", 0) == 0 ||
-      arguments.rfind(L"--host-test", 0) == 0;
-  if (!nativeHost) {
-    return RunSetup(arguments.rfind(L"--setup-silent", 0) == 0);
-  }
+  const std::wstring_view args = commandLine ? commandLine : L"";
+  const bool testHost = args == L"--host-test";
+  const bool nativeHost = testHost || args.rfind(L"chrome-extension://", 0) == 0 ||
+                         args.rfind(L"\"chrome-extension://", 0) == 0;
+  if (!nativeHost) return RunSetup(args == L"--setup-silent", args == L"--uninstall-silent");
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   g_input = GetStdHandle(STD_INPUT_HANDLE);
   g_output = GetStdHandle(STD_OUTPUT_HANDLE);
-  if (!g_input || !g_output || g_input == INVALID_HANDLE_VALUE ||
-      g_output == INVALID_HANDLE_VALUE) return 1;
-  g_browserPid = ParentProcessId();
-
+  // Chromium owns both pipe servers even when cmd.exe is the direct parent.
+  ULONG inputPid = 0, outputPid = 0;
+  if (testHost) g_browserPid = ParentProcessId();
+  else if (GetNamedPipeServerProcessId(g_input, &inputPid) &&
+           GetNamedPipeServerProcessId(g_output, &outputPid) && inputPid == outputPid)
+    g_browserPid = inputPid;
+  if (!g_browserPid) return 1;
   Gdiplus::GdiplusStartupInput startup;
-  if (Gdiplus::GdiplusStartup(&g_gdiplusToken, &startup, nullptr) !=
-      Gdiplus::Ok) return 1;
-
+  if (Gdiplus::GdiplusStartup(&g_gdiplusToken, &startup, nullptr) != Gdiplus::Ok) return 1;
   WNDCLASSW dispatcher{};
   dispatcher.lpfnWndProc = DispatcherProc;
   dispatcher.hInstance = instance;
@@ -683,44 +445,34 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
   button.hInstance = instance;
   button.lpszClassName = kButtonClass;
   button.hCursor = LoadCursorW(nullptr, IDC_HAND);
-  if (!RegisterClassW(&dispatcher) || !RegisterClassW(&button)) {
-    Gdiplus::GdiplusShutdown(g_gdiplusToken);
-    return 1;
-  }
+  if (!RegisterClassW(&dispatcher) || !RegisterClassW(&button)) return 1;
   g_dispatcher = CreateWindowExW(0, kDispatcherClass, L"", 0, 0, 0, 0, 0,
                                  HWND_MESSAGE, nullptr, instance, nullptr);
-  if (!g_dispatcher) {
-    Gdiplus::GdiplusShutdown(g_gdiplusToken);
-    return 1;
-  }
+  if (!g_dispatcher) return 1;
   for (const auto [first, last] : {
-           std::pair<DWORD, DWORD>{EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND},
-           {EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE},
-           {EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND},
-           {EVENT_OBJECT_DESTROY, EVENT_OBJECT_DESTROY}}) {
-    const HWINEVENTHOOK hook = SetWinEventHook(
-        first, last, nullptr, OnWindowEvent, 0, 0,
-        WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+       std::pair<DWORD, DWORD>{EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND},
+       {EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE},
+       {EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND},
+       {EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE}}) {
+    HWINEVENTHOOK hook = SetWinEventHook(first, last, nullptr, OnWindowEvent, g_browserPid, 0,
+                                       WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
     if (hook) g_hooks.push_back(hook);
   }
-  SetTimer(g_dispatcher, kTimerId, 500, nullptr);
+  SetTimer(g_dispatcher, 1, 500, nullptr);
   Send("{\"type\":\"ready\"}");
   std::thread reader(ReadCommands, g_dispatcher);
-  reader.detach();
-
   MSG message{};
   while (GetMessageW(&message, nullptr, 0, 0) > 0) {
     TranslateMessage(&message);
     DispatchMessageW(&message);
   }
-
-  for (const auto& [id, entry] : g_entries) {
-    if (entry.button && IsWindow(entry.button)) {
-      SetWindowLongPtrW(entry.button, GWLP_USERDATA, 0);
-      DestroyWindow(entry.button);
-    }
-  }
+  for (auto& [id, entry] : g_entries) Release(entry);
   for (auto hook : g_hooks) UnhookWinEvent(hook);
+  CancelSynchronousIo(reader.native_handle());
+  reader.join();
+  // Dispose commands posted just before shutdown, before their HWND was destroyed.
+  while (PeekMessageW(&message, nullptr, kCommandMessage, kCommandMessage, PM_REMOVE))
+    delete reinterpret_cast<Command*>(message.lParam);
   Gdiplus::GdiplusShutdown(g_gdiplusToken);
   return 0;
 }

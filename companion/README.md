@@ -1,46 +1,34 @@
 # PopTab Companion — Windows 标题栏置顶图钉
 
-可选的 Windows 小程序。PopTab 扩展继续负责原有标签页迁移；本程序只负责在**系统标题栏**左上角放一个图钉，并使用 Win32 API 切换弹窗系统级置顶。不会往网页里插入按钮，也不注入 Chromium 进程。
+Windows 10/11 x64，C++17 + Win32 + GDI+。无网页按钮、不注入浏览器、不依赖 .NET 或另装 VC++ 运行库。
 
-## 一个 EXE，双击安装
+## 安装与卸载
 
-1. 在 [GitHub Actions 的最新成功构建](https://github.com/snownico0722/PopTab/actions/workflows/companion-windows.yml) 下载 **PopTabCompanion-OneFile-Win64**，解压其中的 `PopTabCompanion.exe`。这是**唯一需要下载的文件**。
-2. **双击 `PopTabCompanion.exe`**。Windows 传统界面会显示安装结果；不需要管理员权限、手动输入扩展 ID、PowerShell 或额外运行时。
-3. 如果浏览器已装好 PR #5 的新版 PopTab，程序自动识别 Chrome、Edge、Brave 下的 PopTab，复制自身到 `%LOCALAPPDATA%\PopTabCompanion`，创建 Native Messaging 清单并注册到当前用户注册表。此时打开 PopTab 弹窗即可显示标题栏图钉。
-4. 如果检测不到扩展，或仅有旧版扩展：程序会把最新版 PopTab 扩展**从 EXE 自身解压**到 `%LOCALAPPDATA%\PopTabCompanion\PopTab-extension`，并引导打开文件夹。请在浏览器扩展页面打开“开发者模式”→“加载已解压的扩展程序”，选择这个固定路径。为避免重复运行两个扩展，可手动关闭旧版；然后再双击同一个 EXE 完成自动绑定。
+下载构建产物中的 `PopTabCompanion.exe`，双击即可。程序自动识别标准目录下 Chrome、Edge、Brave 中**已启用**的 PopTab，包括解压加载的扩展；只读取浏览器配置，不修改它们。
 
-**重要边界：** Chrome/Edge/Brave 不允许桌面应用静默安装或批准新的浏览器扩展。浏览器尚未安装/授权时，需要用户自己完成扩展加载这一步；本地辅助程序和通信注册都能自动完成。
+未安装新版扩展时，EXE 会解压扩展到 `%LOCALAPPDATA%\PopTabCompanion\PopTab-extension` 并打开文件夹。在浏览器扩展页启用开发者模式，加载该文件夹，再运行 EXE。首次加载和新增权限仍需用户在浏览器里确认。更新已有扩展后，请在扩展页重新加载。
 
-这个 EXE 是**双模式程序**：用户双击是安装器，浏览器通过 Native Messaging 启动时自动变成后台宿主。无需另外运行服务，也不会再打开安装窗口。浏览器完全重启后仍可正常使用已注册的宿主。
+已经安装时，再次双击 EXE 可选择**安装 / 修复**或**卸载辅助程序**。修复/卸载会先正常关闭本程序的宿主，不强制结束浏览器。卸载保留浏览器扩展目录，避免破坏已加载的扩展；若从安装目录运行卸载，当前 EXE 关闭后可手动删除。没有常驻更新服务，也不会开机自启。
 
-## 开发者：从源码构建
+## 使用与边界
+
+图钉位于原生标题栏左侧，点击切换该弹窗的置顶状态；多个弹窗独立控制，切换 PopTab 标签继承置顶。最小化、全屏、虚拟桌面隐藏时不留下孤立按钮。
+
+绑定通过一轮前台确认：宿主记录当前 Windows 窗口，扩展确认它对应的 PopTab 窗口 ID，宿主再次检查前台窗口未变化。**不按标题或坐标猜测，也不让两个会话占用同一个窗口。**新开弹窗会自动绑定；重新加载扩展/恢复连接后，尚未绑定的后台弹窗在切到前台时补上图钉，不抢用户焦点。
+
+窗口跟随以系统事件为主，每 500 毫秒校正已有按钮的位置和状态。不存在“8 秒后永远停止绑定”。断线重试使用浏览器闹钟；没有 PopTab 弹窗时不重试，有弹窗时通常一分钟内恢复。未安装辅助程序不影响原有 PopTab 功能。
+
+正常退出/修复/卸载会恢复本程序改变过的置顶状态。强制结束进程无法保证执行退出清理；不为此添加监护进程或后台服务。重新连接并激活弹窗可重新获得图钉控制。
+
+自动发现范围为标准浏览器用户目录；不扫描磁盘寻找便携浏览器。Windows 混合 DPI、不同浏览器主题下的标题栏视觉位置仍需实际体验确认。
+
+## 开发与验证
 
 ```powershell
 cmake -S companion -B companion/build -A x64
 cmake --build companion/build --config Release
 ```
 
-编译生成 `companion/build/Release/PopTabCompanion.exe`，里面已经嵌入最新版浏览器扩展所需的 JS、manifest 和图标资源。可直接复制该 EXE 到其他 Windows 10/11 x64 机器，双击完成安装。
+生成 `companion/build/Release/PopTabCompanion.exe`，扩展 JS、清单和图标直接嵌入 EXE。安装只使用当前用户目录和 HKCU 注册表。
 
-仓库里的旧 `install.ps1`、`Setup.cmd` 等保留作调试和手动安装入口，不再是发布和正常使用的必需文件。
-
-## 操作和状态
-
-- 标题栏左上角系统图标右侧显示图钉，点击一次置顶，再点击取消。
-- 图钉是弹窗拥有的原生小窗口：随移动、缩放、最小化和关闭而变化，默认不会抢走网页输入焦点。
-- 多个 PopTab 弹窗分别控制。切换上/下一个 PopTab 标签会把旧弹窗的置顶状态传给新弹窗。
-- 没装 Companion 或清单/权限不正确时，PopTab 原有功能照常可用；不会弹出错误窗口。
-- 不强制开机自启。最后一个 PopTab 弹窗退出约 10 秒后，通信宿主自动结束。
-- 浏览器完全重启后，原有 PopTab 回收票据按扩展旧逻辑失效；不要期望恢复此前的图钉状态。
-
-## 实现边界
-
-扩展只发送 **PopTab 确认存在的弹窗 ID 和矩形**，不会传任意 Windows 句柄。Native Messaging 宿主只考虑启动它的浏览器进程中，类名为 `Chrome_WidgetWin_1` 的顶层窗口；根据矩形和前台焦点进行保守匹配。若与其他窗口完全重合且无法区分，**宁可不显示图钉，也不绑定错误窗口**。不依赖网页标题，更不改动网页内容。
-
-Win32 使用 `SetWindowPos(HWND_TOPMOST / HWND_NOTOPMOST)`；按钮由 GDI+ 绘制在有主窗口所有权关系的 `WS_EX_NOACTIVATE` 分层小窗口中。窗口位置由系统事件监听，并每 500 毫秒作一次轻量校正；不高频遍历网页。
-
-此实现需要 Windows 实机检查 Chrome / Edge / Brave 的不同主题、缩放、弹窗标题栏高度，特别是多显示器混合 DPI。编译测试不能替代实机视觉检查。系统管理员权限窗口或浏览器特殊模式可能受到 Windows 权限边界限制。
-
-## 卸载
-
-当前仍保留仓库里的 `companion/uninstall.ps1`（从仓库运行），它会移除当前用户的浏览器通信注册与安装目录。后续如需要，也可给同一 EXE 增加图形化卸载入口。正常使用**不需要任何脚本**。
+CI 包含浏览器通信单元测试、安装发现/修复/卸载、以及真实 Chromium 加载扩展后的窗口绑定、置顶、重叠弹窗、标签切换和退出恢复测试。Playwright 仅用于 CI，不进入发布包。测试入口 `--setup-silent`、`--uninstall-silent`、`--host-test` 不影响正常双击行为。

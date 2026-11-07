@@ -1,34 +1,41 @@
 name: PopTab Windows Companion
-
 on:
   push:
     branches: [main, feature/native-titlebar-pin]
   pull_request:
-
+concurrency:
+  group: companion-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/poptab-browsers
     steps:
       - uses: actions/checkout@v4
-      - name: Check extension script and manifest syntax
+      - name: Check extension and bridge behavior
         shell: pwsh
         run: |
           node --check background.js
           node --check native-companion.js
+          node --test companion/tests/bridge.test.cjs
           Get-Content manifest.json -Raw | ConvertFrom-Json | Out-Null
-      - name: Check Native Messaging bridge behavior
-        run: node --test companion/tests/bridge.test.cjs
-      - name: Configure C++
-        run: cmake -S companion -B companion/build -A x64
-      - name: Build C++
-        run: cmake --build companion/build --config Release
-      - name: Native messaging framing smoke test
+      - name: Build portable native EXE
+        run: |
+          cmake -S companion -B companion/build -A x64
+          cmake --build companion/build --config Release
+      - name: Native protocol smoke test
         run: python companion/tests/smoke.py companion/build/Release/PopTabCompanion.exe
-      - name: Test native titlebar button and topmost toggling
-        run: python companion/tests/window_pin.py companion/build/Release/PopTabCompanion.exe
-      - name: Test one-file EXE auto-installation and extension extraction
+      - name: Installer discovery, repair and uninstall
         shell: powershell
         run: .\companion\tests\setup.ps1
+      - name: Install test browser (test-only dependency)
+        run: |
+          python -m pip install playwright
+          python -m playwright install chromium
+      - name: Real Chromium integration
+        run: python companion/tests/window_pin.py companion/build/Release/PopTabCompanion.exe
       - uses: actions/upload-artifact@v4
         with:
           name: PopTabCompanion-OneFile-Win64

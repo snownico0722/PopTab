@@ -1,10 +1,7 @@
-/* Optional Windows companion. PopTab itself never depends on this port. */
+/* Optional companion. Missing host never blocks normal PopTab operations. */
 (() => {
   const HOST = "com.poptab.titlepin";
-  const STORAGE_KEY = "cleanSessions";
-  const RETRY_MS = 30000;
-  const IDLE_MS = 10000;
-
+  const RETRY = "poptab-native-retry";
   let port = null;
   let retryAfter = 0;
   let syncTimer = null;
@@ -13,140 +10,110 @@
   let syncAgain = false;
   let hadWindows = false;
 
-  function cancelIdle() {
-    if (idleTimer !== null) {
-      clearTimeout(idleTimer);
-      idleTimer = null;
-    }
-  }
-
-  function scheduleSync(delay = 80) {
+  function scheduleSync() {
     if (syncTimer !== null) return;
     syncTimer = setTimeout(() => {
       syncTimer = null;
       void syncWindows();
-    }, delay);
+    }, 50);
   }
-
+  function retry() {
+    if (!hadWindows) return;
+    retryAfter = Date.now() + 60000;
+    // A browser alarm survives service-worker suspension; a JS timer does not.
+    void chrome.alarms.create(RETRY, { delayInMinutes: 1 });
+  }
+  function send(message) {
+    if (!port) return;
+    try { port.postMessage(message); } catch { /* onDisconnect owns recovery. */ }
+  }
+  async function collectWindows() {
+    const stored = await chrome.storage.local.get("cleanSessions");
+    const windows = await Promise.all(Object.values(stored.cleanSessions ?? {}).map(async (s) => {
+      if (!Number.isInteger(s?.popupWindowId) || !Number.isInteger(s?.tabId)) return null;
+      try {
+        const [window, tab] = await Promise.all([
+          chrome.windows.get(s.popupWindowId), chrome.tabs.get(s.tabId)
+        ]);
+        return window.type === "popup" && tab.windowId === window.id ? { id: window.id } : null;
+      } catch { return null; }
+    }));
+    return windows.filter(Boolean);
+  }
   function connect() {
-    if (port) return true;
-    if (Date.now() < retryAfter) return false;
-
+    if (port || Date.now() < retryAfter) return;
     try {
       const current = chrome.runtime.connectNative(HOST);
       port = current;
-
-      current.onMessage.addListener((message) => {
-        if (message?.type === "ready") scheduleSync(0);
+      current.onMessage.addListener(async (message) => {
+        if (port !== current) return;
+        if (message?.type === "ready") {
+          retryAfter = 0;
+          void chrome.alarms.clear(RETRY);
+          scheduleSync();
+        } else if (message?.type === "focus" && Number.isInteger(message.request)) {
+          try {
+            const windows = await collectWindows();
+            const focused = await chrome.windows.getLastFocused();
+            if (port !== current) return;
+            // Do not infer identity from identical rectangles or page titles.
+            const id = focused.focused && focused.type === "popup" &&
+              windows.some((w) => w.id === focused.id) ? focused.id : 0;
+            send({ type: "focus", request: message.request, id });
+          } catch { /* Window closed during the query; the next event will retry. */ }
+        }
       });
-
       current.onDisconnect.addListener(() => {
+        void chrome.runtime.lastError; // Missing host is expected before installation.
         if (port !== current) return;
         port = null;
-        cancelIdle();
-        /* A missing host is normal until the user installs the companion. */
-        retryAfter = Date.now() + RETRY_MS;
-        if (hadWindows) scheduleSync(RETRY_MS);
+        clearTimeout(idleTimer);
+        idleTimer = null;
+        retry();
       });
-      return true;
-    } catch {
-      retryAfter = Date.now() + RETRY_MS;
-      return false;
-    }
+    } catch { retry(); }
   }
-
-  function send(message) {
-    if (!port || !message) return false;
-    try {
-      port.postMessage(message);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async function collectWindows() {
-    const stored = await chrome.storage.local.get(STORAGE_KEY);
-    const sessions = Object.values(stored[STORAGE_KEY] ?? {});
-    const result = await Promise.all(sessions.map(async (session) => {
-      const id = session?.popupWindowId;
-      if (!Number.isInteger(id) || !Number.isInteger(session?.tabId)) {
-        return null;
-      }
-
-      try {
-        const [window, tab] = await Promise.all([
-          chrome.windows.get(id),
-          chrome.tabs.get(session.tabId)
-        ]);
-        if (window.type !== "popup" || tab.windowId !== id) return null;
-        const numbers = [window.left, window.top, window.width, window.height];
-        if (!numbers.every(Number.isFinite)) return null;
-        return {
-          id,
-          left: Math.round(window.left),
-          top: Math.round(window.top),
-          width: Math.round(window.width),
-          height: Math.round(window.height)
-        };
-      } catch {
-        return null;
-      }
-    }));
-    return result.filter(Boolean);
-  }
-
   async function syncWindows() {
-    if (syncing) {
-      syncAgain = true;
-      return;
-    }
+    if (syncing) { syncAgain = true; return; }
     syncing = true;
     try {
       const windows = await collectWindows();
       hadWindows = windows.length > 0;
-
       if (hadWindows) {
-        cancelIdle();
-        if (!port) connect();
+        clearTimeout(idleTimer);
+        idleTimer = null;
+        connect();
+      } else {
+        void chrome.alarms.clear(RETRY);
       }
-
-      if (port) send({ type: "sync", windows });
-
+      send({ type: "sync", windows });
       if (!hadWindows && port && idleTimer === null) {
-        /* Keep the host alive briefly across a next/previous-tab handoff. */
+        // The connection keeps this worker alive during a next/previous-tab handoff.
         idleTimer = setTimeout(() => {
           idleTimer = null;
-          if (!hadWindows && port) {
-            port.disconnect();
-            port = null;
-          }
-        }, IDLE_MS);
+          if (!hadWindows) send({ type: "shutdown" });
+        }, 10000);
       }
     } catch (error) {
-      console.debug("PopTab native companion sync:", error);
+      console.debug("PopTab companion:", error);
     } finally {
       syncing = false;
-      if (syncAgain) {
-        syncAgain = false;
-        scheduleSync(0);
-      }
+      if (syncAgain) { syncAgain = false; scheduleSync(); }
     }
   }
-
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "local" && STORAGE_KEY in changes) scheduleSync();
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === RETRY) { retryAfter = 0; scheduleSync(); }
   });
-  chrome.windows.onBoundsChanged.addListener(() => scheduleSync());
-  chrome.windows.onRemoved.addListener(() => scheduleSync());
-
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && "cleanSessions" in changes) scheduleSync();
+  });
+  chrome.windows.onFocusChanged.addListener(scheduleSync);
+  chrome.windows.onRemoved.addListener(scheduleSync);
   self.popTabNativeCompanion = {
-    /* The old popup is destroyed on tab switch. Transfer its pin intentionally. */
     transfer(from, to) {
-      if (!Number.isInteger(from) || !Number.isInteger(to) || from === to) return;
-      send({ type: "transfer", from, to });
+      if (Number.isInteger(from) && Number.isInteger(to) && from !== to)
+        send({ type: "transfer", from, to });
     }
   };
-
-  scheduleSync(0);
+  scheduleSync();
 })();

@@ -1,117 +1,85 @@
-# Windows PowerShell 5.1 end-to-end check of the single self-installing EXE.
+# Isolated current-user install/repair/uninstall test, including real Chromium preference shapes.
 $ErrorActionPreference = 'Stop'
-$originalLocalAppData = $env:LOCALAPPDATA
-$env:LOCALAPPDATA = Join-Path $env:TEMP ("PopTab-OneExe-CI-" + $PID)
-New-Item -ItemType Directory -Path $env:LOCALAPPDATA -Force | Out-Null
-
-$exe = Join-Path $PSScriptRoot '..\build\Release\PopTabCompanion.exe'
-$chromeId = 'abcdefghijklmnopabcdefghijklmnop'
-$edgeId = 'ponmlkjihgfedcbaponmlkjihgfedcba'
-$decoyId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-$wrongId = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-$utf8 = New-Object System.Text.UTF8Encoding($false)
-$hostName = 'com.poptab.titlepin'
-
-function Assert($test, [string]$message) {
-    if (-not $test) { throw $message }
+$originalLocal = $env:LOCALAPPDATA
+$testRoot = Join-Path $env:TEMP ("PopTab-setup-" + $PID)
+$env:LOCALAPPDATA = $testRoot
+$exe = (Resolve-Path (Join-Path $PSScriptRoot '..\build\Release\PopTabCompanion.exe')).Path
+$roots = @('Software\Google\Chrome', 'Software\Microsoft\Edge', 'Software\BraveSoftware\Brave-Browser')
+$backup = @{}
+foreach ($root in $roots) {
+    $path = "$root\NativeMessagingHosts\com.poptab.titlepin"
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($path)
+    if ($key) { $backup[$path] = $key.GetValue(''); $key.Close() }
 }
-
-function New-PopTabEntry {
-    return @{
-        manifest = @{
-            name = 'PopTab'
-            commands = @{ 'toggle-clean-window' = @{ description = 'Open PopTab' } }
-            permissions = @('storage', 'nativeMessaging')
-        }
-        state = 1
-    }
+function Assert($ok, [string]$message) { if (-not $ok) { throw $message } }
+function Run-Installer([string]$argument, [int]$expected) {
+    $process = Start-Process -FilePath $exe -ArgumentList $argument -Wait -PassThru
+    Assert ($process.ExitCode -eq $expected) "Expected $expected; got $($process.ExitCode)"
 }
-
-function Write-Preferences([string]$browser, [string]$profile, [hashtable]$settings) {
-    $directory = Join-Path $env:LOCALAPPDATA "$browser\User Data\$profile"
-    New-Item -ItemType Directory -Force -Path $directory | Out-Null
-    $json = @{
-        extensions = @{ settings = $settings }
-    } | ConvertTo-Json -Depth 12
-    [System.IO.File]::WriteAllText(
-        (Join-Path $directory 'Preferences'), $json, $utf8
-    )
+function Write-Json([string]$path, $value) {
+    New-Item -ItemType Directory -Force -Path (Split-Path $path) | Out-Null
+    $json = ($value | ConvertTo-Json -Depth 20).Replace([string][char]0x4E2D, '\u4e2d')
+    [IO.File]::WriteAllText($path, $json, (New-Object System.Text.UTF8Encoding($false)))
 }
-
 try {
-    # No extension: installer should extract the bundled extension and tell
-    # the user to load it (exit 7 in CI, no GUI message box).
-    $first = Start-Process -FilePath $exe -ArgumentList '--setup-silent' -Wait -PassThru
-    Assert ($first.ExitCode -eq 7) ("Expected onboarding status 7; got $($first.ExitCode)")
-    $install = Join-Path $env:LOCALAPPDATA 'PopTabCompanion'
-    $extension = Join-Path $install 'PopTab-extension'
-    foreach ($filename in @(
-        'manifest.json', 'background.js', 'native-companion.js',
-        'video-float.js', 'assets\icons\icon-16.png',
-        'assets\icons\icon-32.png', 'assets\icons\icon-48.png',
-        'assets\icons\icon-128.png'
-    )) {
-        Assert (Test-Path -LiteralPath (Join-Path $extension $filename) -PathType Leaf) "Missing embedded extension asset: $filename"
+    Run-Installer '--setup-silent' 7
+    $folder = Join-Path $testRoot 'PopTabCompanion'
+    $extension = Join-Path $folder 'PopTab-extension'
+    $manifest = Get-Content (Join-Path $extension 'manifest.json') -Raw | ConvertFrom-Json
+    Assert ($manifest.permissions -contains 'nativeMessaging') 'Missing bundled permission'
+    Assert ($manifest.permissions -contains 'alarms') 'Missing reliable reconnect permission'
+    $chromeId = 'abcdefghijklmnopabcdefghijklmnop'
+    $edgeId = 'ponmlkjihgfedcbaponmlkjihgfedcba'
+    $disabledId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    $decoyId = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    $secure = @{}
+    $secure[$chromeId] = @{ state = 1; manifest = $manifest }
+    $secure[$disabledId] = @{ state = 0; manifest = @{ name = 'PopTab'; commands = @{ 'toggle-clean-window' = @{} } } }
+    $secure[$decoyId] = @{ state = 1; manifest = @{ name = 'Other extension' } }
+    $profile = Join-Path $testRoot 'Google\Chrome\User Data\Default'
+    Write-Json (Join-Path $profile 'Secure Preferences') @{ extensions = @{ settings = $secure } }
+    # A stale enabled record in Preferences must not override Secure Preferences.
+    $stale = @{}; $stale[$disabledId] = @{ state = 1; manifest = $manifest }
+    Write-Json (Join-Path $profile 'Preferences') @{ extensions = @{ settings = $stale } }
+    $unpacked = Join-Path $testRoot ('unpacked-' + [char]0x4E2D)
+    Write-Json (Join-Path $unpacked 'manifest.json') $manifest
+    $edge = @{}; $edge[$edgeId] = @{ path = $unpacked; disable_reasons = @() }
+    Write-Json (Join-Path $testRoot 'Microsoft\Edge\User Data\Profile 1\Preferences') @{ extensions = @{ settings = $edge } }
+    Run-Installer '--setup-silent' 0
+    $nativeManifest = Get-Content (Join-Path $folder 'native-host.json') -Raw | ConvertFrom-Json
+    Assert ($nativeManifest.allowed_origins.Count -eq 2) 'Wrong authorized extension count'
+    foreach ($id in @($chromeId, $edgeId)) {
+        Assert ($nativeManifest.allowed_origins -contains "chrome-extension://$id/") "Missing extension $id"
     }
-    $extensionManifest = Get-Content (Join-Path $extension 'manifest.json') -Raw | ConvertFrom-Json
-    Assert ($extensionManifest.permissions -contains 'nativeMessaging') 'The embedded extension lacks Native Messaging permission'
-
-    $chromeSettings = @{}
-    $chromeSettings[$chromeId] = New-PopTabEntry
-    $chromeSettings[$decoyId] = @{
-        manifest = @{ name = 'Unrelated'; commands = @{ 'toggle-clean-window' = @{} } }
-    }
-    $chromeSettings[$wrongId] = @{
-        manifest = @{ name = 'PopTab'; commands = @{ 'not-the-poptab-command' = @{} } }
-    }
-    $edgeSettings = @{}
-    $edgeSettings[$edgeId] = New-PopTabEntry
-    Write-Preferences 'Google\Chrome' 'Default' $chromeSettings
-    Write-Preferences 'Microsoft\Edge' 'Profile 2' $edgeSettings
-
-    $installed = Start-Process -FilePath $exe -ArgumentList '--setup-silent' -Wait -PassThru
-    Assert ($installed.ExitCode -eq 0) ("Automated EXE setup failed: $($installed.ExitCode)")
-    $manifestPath = Join-Path $install 'native-host.json'
-    $hostManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    Assert ($hostManifest.name -eq $hostName) 'Native host name mismatch'
-    Assert ($hostManifest.type -eq 'stdio') 'Native host type mismatch'
-    Assert (@($hostManifest.allowed_origins).Count -eq 2) 'Wrong auto-discovered extension count'
-    Assert ($hostManifest.allowed_origins -contains "chrome-extension://$chromeId/") 'Missing Chrome PopTab ID'
-    Assert ($hostManifest.allowed_origins -contains "chrome-extension://$edgeId/") 'Missing Edge PopTab ID'
-    Assert ($hostManifest.allowed_origins -notcontains "chrome-extension://$decoyId/") 'Decoy authorized'
-    Assert ($hostManifest.allowed_origins -notcontains "chrome-extension://$wrongId/") 'Wrong command authorized'
-    Assert (Test-Path -LiteralPath $hostManifest.path -PathType Leaf) 'Native host executable missing'
-
-    $installedHash = (Get-FileHash -Algorithm SHA256 $hostManifest.path).Hash
-    $sourceHash = (Get-FileHash -Algorithm SHA256 $exe).Hash
-    Assert ($installedHash -eq $sourceHash) 'Installed EXE differs from the downloaded one'
-
-    foreach ($browser in @('Google\Chrome', 'Microsoft\Edge')) {
-        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey(
-            "Software\$browser\NativeMessagingHosts\$hostName"
-        )
-        Assert ($null -ne $key) "Missing registry key for $browser"
-        Assert ($key.GetValue('') -eq $manifestPath) 'Registry manifest path mismatch'
-        $key.Close()
-    }
-
-    # A second double click must not duplicate IDs or require reinstallation.
-    $again = Start-Process -FilePath $exe -ArgumentList '--setup-silent' -Wait -PassThru
-    Assert ($again.ExitCode -eq 0) ("Repeat setup failed: $($again.ExitCode)")
-    $hostManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    Assert (@($hostManifest.allowed_origins).Count -eq 2) 'Repeat setup changed origin count'
-
-    Write-Host 'One-file EXE extraction, discovery, registry and repeat-install tests passed.'
+    Assert ((Get-FileHash $exe).Hash -eq (Get-FileHash $nativeManifest.path).Hash) 'Installed executable differs'
+    # Repair a running native host without killing any browser.
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName = $nativeManifest.path
+    $start.Arguments = '--host-test'
+    $start.UseShellExecute = $false
+    $start.RedirectStandardInput = $true
+    $start.RedirectStandardOutput = $true
+    $hostProcess = [System.Diagnostics.Process]::Start($start)
+    $header = New-Object byte[] 4
+    Assert ($hostProcess.StandardOutput.BaseStream.Read($header, 0, 4) -eq 4) 'Host did not start'
+    Run-Installer '--setup-silent' 0
+    Assert ($hostProcess.WaitForExit(5000)) 'Repair did not stop the old host'
+    Assert ($hostProcess.ExitCode -eq 0) 'Old host did not exit cleanly'
+    Run-Installer '--uninstall-silent' 0
+    Assert (-not (Test-Path (Join-Path $folder 'native-host.json'))) 'Manifest remains'
+    Assert (-not (Test-Path (Join-Path $folder 'PopTabCompanion.exe'))) 'Installed executable remains'
+    Assert (Test-Path (Join-Path $extension 'manifest.json')) 'Uninstall removed the browser extension'
+    Write-Host 'Installer discovery, Unicode path, disabled copy, live repair and uninstall passed.'
 } finally {
-    foreach ($root in @(
-        'Software\Google\Chrome\NativeMessagingHosts',
-        'Software\Microsoft\Edge\NativeMessagingHosts',
-        'Software\BraveSoftware\Brave-Browser\NativeMessagingHosts'
-    )) {
-        [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKey(
-            "$root\$hostName", $false
-        )
+    if ($hostProcess -and -not $hostProcess.HasExited) { $hostProcess.Kill() }
+    foreach ($root in $roots) {
+        $path = "$root\NativeMessagingHosts\com.poptab.titlepin"
+        [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKey($path, $false)
+        if ($backup.ContainsKey($path)) {
+            $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($path)
+            $key.SetValue('', $backup[$path]); $key.Close()
+        }
     }
-    $env:LOCALAPPDATA = $originalLocalAppData
-    Remove-Item -LiteralPath (Join-Path $env:TEMP ("PopTab-OneExe-CI-" + $PID)) -Recurse -Force -ErrorAction SilentlyContinue
+    $env:LOCALAPPDATA = $originalLocal
+    Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
