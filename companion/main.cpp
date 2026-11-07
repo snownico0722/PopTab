@@ -1,8 +1,7 @@
 // PopTab Companion: optional Windows-only native messaging host.
 // No browser injection, no polling of webpage content, no third-party UI framework.
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
 #include <windows.h>
+#include <objidl.h>
 #include <windowsx.h>
 #include <dwmapi.h>
 #include <gdiplus.h>
