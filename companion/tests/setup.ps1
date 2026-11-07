@@ -72,17 +72,17 @@ try {
     $installed = Start-Process -FilePath $exe -ArgumentList '--setup-silent' -Wait -PassThru
     Assert ($installed.ExitCode -eq 0) ("Automated EXE setup failed: $($installed.ExitCode)")
     $manifestPath = Join-Path $install 'native-host.json'
-    $host = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    Assert ($host.name -eq $hostName) 'Native host name mismatch'
-    Assert ($host.type -eq 'stdio') 'Native host type mismatch'
-    Assert (@($host.allowed_origins).Count -eq 2) 'Wrong auto-discovered extension count'
-    Assert ($host.allowed_origins -contains "chrome-extension://$chromeId/") 'Missing Chrome PopTab ID'
-    Assert ($host.allowed_origins -contains "chrome-extension://$edgeId/") 'Missing Edge PopTab ID'
-    Assert ($host.allowed_origins -notcontains "chrome-extension://$decoyId/") 'Decoy authorized'
-    Assert ($host.allowed_origins -notcontains "chrome-extension://$wrongId/") 'Wrong command authorized'
-    Assert (Test-Path -LiteralPath $host.path -PathType Leaf) 'Native host executable missing'
+    $hostManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    Assert ($hostManifest.name -eq $hostName) 'Native host name mismatch'
+    Assert ($hostManifest.type -eq 'stdio') 'Native host type mismatch'
+    Assert (@($hostManifest.allowed_origins).Count -eq 2) 'Wrong auto-discovered extension count'
+    Assert ($hostManifest.allowed_origins -contains "chrome-extension://$chromeId/") 'Missing Chrome PopTab ID'
+    Assert ($hostManifest.allowed_origins -contains "chrome-extension://$edgeId/") 'Missing Edge PopTab ID'
+    Assert ($hostManifest.allowed_origins -notcontains "chrome-extension://$decoyId/") 'Decoy authorized'
+    Assert ($hostManifest.allowed_origins -notcontains "chrome-extension://$wrongId/") 'Wrong command authorized'
+    Assert (Test-Path -LiteralPath $hostManifest.path -PathType Leaf) 'Native host executable missing'
 
-    $installedHash = (Get-FileHash -Algorithm SHA256 $host.path).Hash
+    $installedHash = (Get-FileHash -Algorithm SHA256 $hostManifest.path).Hash
     $sourceHash = (Get-FileHash -Algorithm SHA256 $exe).Hash
     Assert ($installedHash -eq $sourceHash) 'Installed EXE differs from the downloaded one'
 
@@ -98,8 +98,8 @@ try {
     # A second double click must not duplicate IDs or require reinstallation.
     $again = Start-Process -FilePath $exe -ArgumentList '--setup-silent' -Wait -PassThru
     Assert ($again.ExitCode -eq 0) ("Repeat setup failed: $($again.ExitCode)")
-    $host = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    Assert (@($host.allowed_origins).Count -eq 2) 'Repeat setup changed origin count'
+    $hostManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    Assert (@($hostManifest.allowed_origins).Count -eq 2) 'Repeat setup changed origin count'
 
     Write-Host 'One-file EXE extraction, discovery, registry and repeat-install tests passed.'
 } finally {
