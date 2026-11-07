@@ -1,0 +1,29 @@
+name: PopTab Windows Companion
+
+on:
+  push:
+    branches: [main, feature/native-titlebar-pin]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check extension script and manifest syntax
+        shell: pwsh
+        run: |
+          node --check background.js
+          node --check native-companion.js
+          Get-Content manifest.json -Raw | ConvertFrom-Json | Out-Null
+      - name: Configure C++
+        run: cmake -S companion -B companion/build -A x64
+      - name: Build C++
+        run: cmake --build companion/build --config Release
+      - name: Native messaging framing smoke test
+        run: python companion/tests/smoke.py companion/build/Release/PopTabCompanion.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PopTabCompanion-Win64
+          path: companion/build/Release/PopTabCompanion.exe
+          if-no-files-found: error
