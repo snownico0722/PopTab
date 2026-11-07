@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <string>
 #include <cwchar>
+#include <iterator>
 
 namespace {
 constexpr wchar_t kTrayTitle[] = L"PopTab Companion";
@@ -273,12 +274,9 @@ int RunTray(HINSTANCE instance) {
     return 1;
   }
   auto data = TrayData(g_trayWindow);
-  if (!Shell_NotifyIconW(NIM_ADD, &data)) {
-    DestroyWindow(g_trayWindow);
-    Gdiplus::GdiplusShutdown(graphicsToken);
-    CloseHandle(mutex);
-    return 1;
-  }
+  // Explorer can be starting during logon. Keep the tray service running;
+  // TaskbarCreated will add the icon when Explorer becomes available.
+  Shell_NotifyIconW(NIM_ADD, &data);
 
   MSG message{};
   while (GetMessageW(&message, nullptr, 0, 0) > 0) {
