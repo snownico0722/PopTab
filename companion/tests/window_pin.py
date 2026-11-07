@@ -111,7 +111,7 @@ def is_pinned():
     return bool(u32.GetWindowLongPtrW(target, GWL_EXSTYLE) & WS_EX_TOPMOST)
 
 proc = subprocess.Popen(
-    [sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    [sys.argv[1], "--host-test"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
 )
 try:
