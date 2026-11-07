@@ -8,11 +8,16 @@ param(
     [ValidateSet('Chrome', 'Edge', 'Brave', 'All')]
     [string]$Browser = 'Chrome',
 
-    [string]$ExePath = (Join-Path $PSScriptRoot 'build\Release\PopTabCompanion.exe')
+    [string]$ExePath = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $hostName = 'com.poptab.titlepin'
+if ([string]::IsNullOrWhiteSpace($ExePath)) {
+    $portableExe = Join-Path $PSScriptRoot 'PopTabCompanion.exe'
+    $builtExe = Join-Path $PSScriptRoot 'build\Release\PopTabCompanion.exe'
+    $ExePath = if (Test-Path -LiteralPath $portableExe) { $portableExe } else { $builtExe }
+}
 $absoluteExe = (Resolve-Path -LiteralPath $ExePath -ErrorAction Stop).Path
 $destination = Join-Path $env:LOCALAPPDATA 'PopTabCompanion'
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
