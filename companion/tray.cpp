@@ -125,6 +125,16 @@ void ShowMenu(HWND window) {
   PostMessageW(window, WM_NULL, 0, 0);
 }
 
+void QuitTray(HWND window) {
+  // Keep the tray available if a native host did not actually stop.
+  if (!StopHostsForCompanion(Executable())) {
+    MessageBoxW(window, L"置顶服务尚未退出，请稍后重试。",
+                kTrayTitle, MB_OK | MB_ICONWARNING);
+    return;
+  }
+  DestroyWindow(window);
+}
+
 LRESULT CALLBACK TrayProc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
   if (g_taskbarCreated && message == g_taskbarCreated) {
     auto data = TrayData(window);
@@ -154,14 +164,12 @@ LRESULT CALLBACK TrayProc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
         }
         case kExit:
           // Quit the whole companion, but keep the explicit startup preference.
-          StopHostsForCompanion(Executable());
-          DestroyWindow(window);
+          QuitTray(window);
           return 0;
       }
       break;
     case WM_CLOSE:
-      StopHostsForCompanion(Executable());
-      DestroyWindow(window);
+      QuitTray(window);
       return 0;
     case WM_DESTROY: {
       auto data = TrayData(window);
