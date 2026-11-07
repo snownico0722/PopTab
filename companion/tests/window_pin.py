@@ -25,6 +25,9 @@ u.ShowWindow.argtypes = [H, ctypes.c_int]
 u.IsWindowVisible.argtypes = [H]; u.IsWindowVisible.restype = W.BOOL
 u.SetForegroundWindow.argtypes = [H]
 u.GetWindowRect.argtypes = [H, ctypes.POINTER(W.RECT)]
+u.WindowFromPoint.argtypes = [W.POINT]
+u.WindowFromPoint.restype = H
+u.GetForegroundWindow.restype = H
 
 def windows():
     result = []
@@ -53,6 +56,23 @@ def pinned(hwnd):
 def click(hwnd):
     point = 10 | (10 << 16)
     u.SendMessageW(hwnd, 0x0201, 0, point); u.SendMessageW(hwnd, 0x0202, 0, point)
+
+def rect(hwnd):
+    result = W.RECT()
+    assert u.GetWindowRect(hwnd, ctypes.byref(result))
+    return result
+
+def button_is_frontmost(hwnd):
+    # IsWindowVisible alone is insufficient: a layered window can be covered
+    # by its owner after it enters the TOPMOST band.
+    box = rect(hwnd)
+    point = W.POINT((box.left + box.right) // 2, (box.top + box.bottom) // 2)
+    return u.IsWindowVisible(hwnd) and u.WindowFromPoint(point) == hwnd
+
+def assert_caption_position(button, browser):
+    pin, window = rect(button), rect(browser)
+    assert 20 <= pin.left - window.left <= 75, (pin, window)
+    assert -2 <= pin.top - window.top <= 45, (pin, window)
 
 def wait_for(predicate, message, timeout=15):
     stop = time.monotonic() + timeout
@@ -102,7 +122,11 @@ with tempfile.TemporaryDirectory(prefix='PopTab-browser-') as temporary:
             }''')
             a_hwnd = wait_for(lambda: target('PopTab native test A'), 'A HWND missing')
             a_button = wait_for(lambda: buttons().get(a_hwnd), 'A button missing')[0]
+            assert_caption_position(a_button, a_hwnd)
+            foreground = u.GetForegroundWindow()
             click(a_button); wait_for(lambda: pinned(a_hwnd), 'A did not pin')
+            wait_for(lambda: button_is_frontmost(a_button), 'Pin disappeared after FIRST click without focus change')
+            assert u.GetForegroundWindow() == foreground, 'Click stole browser focus'
             # B starts already topmost, before PopTab takes control of it.
             b = worker.evaluate('''async () => {
                 const w = await chrome.windows.create({type:'popup',url:'data:text/html,<title>PopTab native test B</title>B',focused:true});
@@ -116,6 +140,7 @@ with tempfile.TemporaryDirectory(prefix='PopTab-browser-') as temporary:
                 await saveSessions(sessions);
             }''', b)
             b_button = wait_for(lambda: buttons().get(b_hwnd), 'B button missing')[0]
+            assert_caption_position(b_button, b_hwnd)
             worker.evaluate('''async ids => {
                 for (const id of ids) await chrome.windows.update(id,{left:150,top:120,width:700,height:450});
             }''', [a['id'], b['id']])

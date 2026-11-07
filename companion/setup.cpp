@@ -1,4 +1,5 @@
 #include "setup.h"
+#include "tray.h"
 #include <windows.h>
 #include <commctrl.h>
 #include <shellapi.h>
@@ -349,6 +350,10 @@ void Show(bool silent, const std::wstring& text, UINT icon = MB_ICONINFORMATION)
 }
 } // namespace
 
+bool StopHostsForCompanion(const std::filesystem::path& installed) {
+  return StopHosts(installed);
+}
+
 int RunSetup(bool silent, bool uninstall) {
   silent |= uninstall;
   const fs::path local = Environment(L"LOCALAPPDATA");
@@ -359,22 +364,34 @@ int RunSetup(bool silent, bool uninstall) {
   const fs::path manifest = folder / L"native-host.json";
   const fs::path extensionFolder = folder / L"PopTab-extension";
   if (!silent && fs::exists(installed)) {
-    const TASKDIALOG_BUTTON buttons[] = {{100, L"安装 / 修复"}, {101, L"卸载辅助程序"}};
+    const bool canStartTray = fs::exists(manifest) && !IsTrayRunning();
+    const TASKDIALOG_BUTTON buttons[] = {
+      {102, L"启动托盘"}, {100, L"安装 / 修复"}, {101, L"卸载辅助程序"}
+    };
     TASKDIALOGCONFIG dialog{sizeof(dialog)};
     dialog.pszWindowTitle = L"PopTab Companion";
     dialog.pszMainInstruction = L"PopTab 标题栏置顶";
     dialog.pszContent = L"卸载只移除辅助程序和通信配置，保留浏览器扩展。";
     dialog.dwCommonButtons = TDCBF_CANCEL_BUTTON;
-    dialog.cButtons = 2;
-    dialog.pButtons = buttons;
-    dialog.nDefaultButton = 100;
+    dialog.cButtons = canStartTray ? 3 : 2;
+    dialog.pButtons = canStartTray ? buttons : buttons + 1;
+    dialog.nDefaultButton = canStartTray ? 102 : 100;
     int selected = IDCANCEL;
     if (FAILED(TaskDialogIndirect(&dialog, &selected, nullptr, nullptr)) || selected == IDCANCEL) return 0;
+    if (selected == 102) {
+      if (!StartTray(installed))
+        Show(false, L"无法启动托盘程序。", MB_ICONERROR);
+      return 0;
+    }
     uninstall = selected == 101;
   }
   if (uninstall) {
+    if (!StopTray(installed) || !StopHosts(installed)) {
+      Show(silent, L"辅助程序暂未退出，请关闭 PopTab 弹窗后重试。", MB_ICONERROR);
+      return 4;
+    }
+    RemoveAutoStart();
     for (const auto& browser : kBrowsers) RegDeleteKeyW(HKEY_CURRENT_USER, browser.registry);
-    if (!StopHosts(installed)) { Show(silent, L"辅助程序暂未退出，请关闭 PopTab 弹窗后重试。", MB_ICONERROR); return 4; }
     std::error_code error;
     fs::remove(manifest, error);
     if (_wcsicmp(self.c_str(), installed.c_str()) != 0) {
@@ -387,9 +404,10 @@ int RunSetup(bool silent, bool uninstall) {
   std::error_code error;
   fs::create_directories(folder, error);
   if (error) return 2;
-  // Stop the host before touching the EXE or the embedded extension files.
-  if (!StopHosts(installed) || (_wcsicmp(self.c_str(), installed.c_str()) != 0 &&
-      !CopyFileW(self.c_str(), installed.c_str(), FALSE))) {
+  // Stop the tray and native hosts before replacing the single EXE.
+  if (!StopTray(installed) || !StopHosts(installed) ||
+      (_wcsicmp(self.c_str(), installed.c_str()) != 0 &&
+       !CopyFileW(self.c_str(), installed.c_str(), FALSE))) {
     Show(silent, L"无法更新辅助程序。请关闭 PopTab 弹窗后重试；浏览器不会被强制结束。", MB_ICONERROR);
     return 4;
   }
@@ -403,6 +421,10 @@ int RunSetup(bool silent, bool uninstall) {
     return found.empty() ? 7 : 8;
   }
   if (!RegisterHosts(manifest, installed, found)) { Show(silent, L"无法注册浏览器通信。", MB_ICONERROR); return 5; }
-  Show(silent, L"安装完成。\n\n刚更新扩展时，请在浏览器扩展页重新加载一次。\n打开或激活 PopTab 弹窗即可使用标题栏图钉。\n已打开的弹窗会在下一次重连时恢复，通常不超过一分钟。");
+  if (!ConfigureAutoStart(installed) || !StartTray(installed)) {
+    Show(silent, L"无法启动托盘或配置开机启动。请检查当前用户的启动权限。", MB_ICONERROR);
+    return 6;
+  }
+  Show(silent, L"安装完成，托盘程序已启动。\n\n默认开机自启动，可在托盘右键菜单中关闭。\n托盘还提供打开文件位置和退出。\n\n刚更新扩展时，请在浏览器扩展页重新加载一次。\n打开或激活 PopTab 弹窗即可使用标题栏图钉。");
   return 0;
 }

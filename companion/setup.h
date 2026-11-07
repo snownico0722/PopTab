@@ -1,3 +1,5 @@
 #pragma once
-// Same executable: double-click installs/repairs; browser launch runs the host.
+#include <filesystem>
+// The same EXE installs/repairs, runs the tray, and serves Native Messaging.
 int RunSetup(bool silent, bool uninstall = false);
+bool StopHostsForCompanion(const std::filesystem::path& installed);

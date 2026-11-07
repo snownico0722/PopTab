@@ -8,6 +8,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build:
+    permissions:
+      contents: write # publish the v0.2.1 Release only after main's full CI succeeds
     runs-on: windows-latest
     timeout-minutes: 15
     env:
@@ -41,3 +43,16 @@ jobs:
           name: PopTabCompanion-OneFile-Win64
           path: companion/build/Release/PopTabCompanion.exe
           if-no-files-found: error
+      - name: Publish PopTab Companion v0.2.1 on main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "v0.2.1" --repo "$env:GITHUB_REPOSITORY" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "v0.2.1 Release already exists, skipping publish."
+            exit 0
+          }
+          gh release create "v0.2.1" "companion/build/Release/PopTabCompanion.exe#PopTabCompanion.exe" --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --title "PopTab Companion v0.2.1" --notes-file "companion/RELEASE_NOTES_0.2.1.md"
+          if ($LASTEXITCODE -ne 0) { throw "Unable to publish GitHub Release v0.2.1" }

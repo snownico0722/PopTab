@@ -12,6 +12,28 @@ foreach ($root in $roots) {
     if ($key) { $backup[$path] = $key.GetValue(''); $key.Close() }
 }
 function Assert($ok, [string]$message) { if (-not $ok) { throw $message } }
+Add-Type -Namespace PopTabTest -Name Window -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern System.IntPtr FindWindow(string className, string title);
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern System.IntPtr SendMessage(System.IntPtr window, uint message, System.IntPtr wParam, System.IntPtr lParam);
+'@
+function Tray-Window {
+    return [PopTabTest.Window]::FindWindow('PopTabCompanionTrayWindow', 'PopTab Companion')
+}
+function Wait-Tray {
+    for ($try = 0; $try -lt 60; $try++) {
+        $window = Tray-Window
+        if ($window -ne [System.IntPtr]::Zero) { return $window }
+        Start-Sleep -Milliseconds 100
+    }
+    throw 'Tray process did not start'
+}
+function Startup-Entry {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run')
+    if ($null -eq $key) { return $null }
+    try { return $key.GetValue('PopTabCompanion', $null) } finally { $key.Close() }
+}
 function Run-Installer([string]$argument, [int]$expected) {
     Write-Host "Starting $argument; expecting $expected"
     $start = New-Object System.Diagnostics.ProcessStartInfo
@@ -33,6 +55,8 @@ function Write-Json([string]$path, $value) {
 }
 try {
     Run-Installer '--setup-silent' 7
+    Assert ((Tray-Window) -eq [IntPtr]::Zero) 'Incomplete setup must not start tray'
+    Assert ((Startup-Entry) -eq $null) 'Incomplete setup must not register auto-start'
     $folder = Join-Path $testRoot 'PopTabCompanion'
     $extension = Join-Path $folder 'PopTab-extension'
     $manifest = Get-Content (Join-Path $extension 'manifest.json') -Raw | ConvertFrom-Json
@@ -57,6 +81,8 @@ try {
     $edge = @{}; $edge[$edgeId] = @{ path = $unpacked; disable_reasons = @() }
     Write-Json (Join-Path $testRoot 'Microsoft\Edge\User Data\Profile 1\Preferences') @{ extensions = @{ settings = $edge } }
     Run-Installer '--setup-silent' 0
+    $tray = Wait-Tray
+    Assert ((Startup-Entry) -match '\-\-tray') 'Default auto-start is not enabled'
     $nativeManifest = Get-Content (Join-Path $folder 'native-host.json') -Raw | ConvertFrom-Json
     Assert ($nativeManifest.allowed_origins.Count -eq 2) 'Wrong authorized extension count'
     foreach ($id in @($chromeId, $edgeId)) {
@@ -78,12 +104,47 @@ try {
     Run-Installer '--setup-silent' 0
     Assert ($hostProcess.WaitForExit(5000)) 'Repair did not stop the old host'
     Assert ($hostProcess.ExitCode -eq 0) 'Old host did not exit cleanly'
+    $tray = Wait-Tray
+    # The user can disable startup without disabling the running service.
+    [PopTabTest.Window]::SendMessage($tray, 0x0111, [IntPtr]401, [IntPtr]::Zero) | Out-Null
+    Assert ((Startup-Entry) -eq $null) 'Unchecking auto-start did not remove Run entry'
+    Run-Installer '--setup-silent' 0
+    Assert ((Startup-Entry) -eq $null) 'Repair must preserve disabled auto-start'
+    $tray = Wait-Tray
+    [PopTabTest.Window]::SendMessage($tray, 0x0111, [IntPtr]401, [IntPtr]::Zero) | Out-Null
+    Assert ((Startup-Entry) -match '\-\-tray') 'Re-enabling auto-start failed'
+    # Exit must stop the tray without changing the chosen startup preference.
+    [PopTabTest.Window]::SendMessage($tray, 0x0111, [IntPtr]403, [IntPtr]::Zero) | Out-Null
+    for ($try = 0; $try -lt 30 -and (Tray-Window) -ne [IntPtr]::Zero; $try++) {
+        Start-Sleep -Milliseconds 100
+    }
+    Assert ((Tray-Window) -eq [IntPtr]::Zero) 'Tray Exit did not stop the service'
+    Assert ((Startup-Entry) -match '\-\-tray') 'Tray Exit changed auto-start unexpectedly'
+    # Launching the installed EXE in tray mode must work without reinstalling.
+    $trayProcess = Start-Process -FilePath $nativeManifest.path -ArgumentList '--tray' -PassThru
+    try {
+        $tray = Wait-Tray
+    } catch {
+        $trayProcess.Refresh()
+        $exit = if ($trayProcess.HasExited) { $trayProcess.ExitCode } else { '<still running>' }
+        $remaining = @(Get-Process PopTabCompanion -ErrorAction SilentlyContinue |
+            Select-Object Id, HasExited, Path | ConvertTo-Json -Compress)
+        Write-Host "Tray start failed: new PID=$($trayProcess.Id), exit=$exit, processes=$remaining"
+        throw
+    }
+    Assert ($tray -ne [IntPtr]::Zero) 'Failed to reopen tray after Exit'
+    Assert ((Startup-Entry) -match '\-\-tray') 'Restarting tray changed auto-start unexpectedly'
     Run-Installer '--uninstall-silent' 0
+    Assert ((Startup-Entry) -eq $null) 'Uninstall did not remove auto-start'
     Assert (-not (Test-Path (Join-Path $folder 'native-host.json'))) 'Manifest remains'
     Assert (-not (Test-Path (Join-Path $folder 'PopTabCompanion.exe'))) 'Installed executable remains'
     Assert (Test-Path (Join-Path $extension 'manifest.json')) 'Uninstall removed the browser extension'
     Write-Host 'Installer discovery, Unicode path, disabled copy, live repair and uninstall passed.'
 } finally {
+    $remainingTray = Tray-Window
+    if ($remainingTray -ne [IntPtr]::Zero) {
+        [PopTabTest.Window]::SendMessage($remainingTray, 0x0111, [IntPtr]403, [IntPtr]::Zero) | Out-Null
+    }
     if ($hostProcess -and -not $hostProcess.HasExited) { $hostProcess.Kill() }
     foreach ($root in $roots) {
         $path = "$root\NativeMessagingHosts\com.poptab.titlepin"
@@ -93,6 +154,9 @@ try {
             $key.SetValue('', $backup[$path]); $key.Close()
         }
     }
+    $run = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run', $true)
+    if ($run) { $run.DeleteValue('PopTabCompanion', $false); $run.Close() }
+    [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKey('Software\PopTabCompanion', $false)
     $env:LOCALAPPDATA = $originalLocal
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
