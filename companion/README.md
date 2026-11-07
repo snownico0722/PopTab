@@ -6,8 +6,22 @@
 
 - Windows 10/11，x64。
 - Chrome、Edge 或 Brave；已安装同一仓库版本的 PopTab 扩展。
-- Windows CMake + Visual Studio 2022 C++ 桌面工具（用于自行编译）；也可从 GitHub Actions 的 Windows 构建产物获得 EXE。
+- **最简单：**下载 GitHub Actions 的 `PopTabCompanion-Win64` 构建产物，解压后即可运行 `install.ps1`，无需自行编译。
+- 如果自行编译：使用 Windows CMake + Visual Studio 2022 C++ 桌面工具。
 - 不需要管理员权限，不需要安装 .NET、WPF 或 WinUI。
+
+## 直接使用构建包（推荐）
+
+1. 打开 [Windows 构建记录](https://github.com/snownico0722/PopTab/actions/workflows/companion-windows.yml)，下载最新成功构建的 `PopTabCompanion-Win64` 压缩包并解压。
+2. 打开对应浏览器的扩展管理页，复制 PopTab 的扩展 ID。
+3. 在解压目录中执行：
+   
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\install.ps1 -ExtensionId 你的32位扩展ID -Browser Chrome
+   ```
+4. 重新加载 PopTab 扩展，新开的 PopTab 弹窗就会显示原生标题栏图钉。
+
+下方编译和安装方式适合直接从仓库源代码运行。
 
 ## 编译
 
