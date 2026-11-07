@@ -42,7 +42,7 @@ try {
     # No extension: installer should extract the bundled extension and tell
     # the user to load it (exit 7 in CI, no GUI message box).
     & $exe --setup-silent
-    Assert ($LASTEXITCODE -eq 7) 'Expected missing-extension onboarding status'
+    Assert ($LASTEXITCODE -eq 7) ("Expected missing-extension onboarding status 7; got $LASTEXITCODE")
     $install = Join-Path $env:LOCALAPPDATA 'PopTabCompanion'
     $extension = Join-Path $install 'PopTab-extension'
     foreach ($filename in @(
